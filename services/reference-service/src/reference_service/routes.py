@@ -26,6 +26,11 @@ from cip_data import tenant_session
 from cip_events import EventEnvelope
 from reference_service.deps import Deps, get_deps
 
+# Tagged "demo" so contract tests (Schemathesis) can exclude these routes —
+# they exercise the full stack but their invariants (X-Tenant-ID header
+# required in middleware, custom Idempotency-Key requirement) aren't
+# expressible in OpenAPI cleanly. Real service endpoints in later modules
+# will be contract-tested normally.
 router = APIRouter(prefix="/v1/demo", tags=["demo"])
 
 DEMO_TOPIC = "cip.demo.echoed"
