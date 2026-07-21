@@ -1,0 +1,23 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "identity-service",
+      "runtimeExecutable": "python",
+      "runtimeArgs": [
+        "-m",
+        "uv",
+        "run",
+        "uvicorn",
+        "identity_service.main:app",
+        "--env-file",
+        ".env",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "port": 8000
+    }
+  ]
+}

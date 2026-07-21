@@ -15,6 +15,7 @@ from fastapi import FastAPI
 import cip_core
 import cip_observability
 from identity_service import __version__
+from identity_service.consent_routes import consent_router, guardianship_router
 from identity_service.deps import build_deps, shutdown_deps
 from identity_service.health import router as health_router
 from identity_service.health import version_router
@@ -53,6 +54,8 @@ def create_app() -> FastAPI:
     app.include_router(auth_router)
     app.include_router(membership_router)
     app.include_router(me_router)
+    app.include_router(guardianship_router)
+    app.include_router(consent_router)
 
     return app
 
