@@ -4,7 +4,16 @@ version = "0.1.0"
 description = "CIP data-access base: SQLAlchemy 2.0 async, tenant RLS helper, Alembic runner."
 requires-python = ">=3.12,<3.13"
 readme = "README.md"
-dependencies = []
+dependencies = [
+    "cip-core",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    # SQLAlchemy instrumentor lives with cip-data (the lib that brings in
+    # sqlalchemy). cip-observability picks it up automatically via its
+    # optional try-import.
+    "opentelemetry-instrumentation-sqlalchemy>=0.49b0",
+]
 
 [build-system]
 requires = ["hatchling"]

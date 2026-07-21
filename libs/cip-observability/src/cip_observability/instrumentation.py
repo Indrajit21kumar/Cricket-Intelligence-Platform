@@ -64,7 +64,7 @@ def install(
 
     if instrument_sqlalchemy and not _sqlalchemy_instrumented:
         try:
-            from opentelemetry.instrumentation.sqlalchemy import (  # type: ignore[import-not-found]
+            from opentelemetry.instrumentation.sqlalchemy import (  # type: ignore[import-not-found, unused-ignore]
                 SQLAlchemyInstrumentor,
             )
         except ImportError:
