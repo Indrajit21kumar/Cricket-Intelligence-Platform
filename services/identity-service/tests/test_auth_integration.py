@@ -220,9 +220,11 @@ class TestMinorVerificationTransitionsToPendingConsent:
 
 class TestLoginSafety:
     async def test_unknown_email_returns_generic_401(self, client: httpx.AsyncClient) -> None:
+        # Fresh email each run — a fixed one would accumulate lockout
+        # failures in Redis across runs and eventually 429 (Step 8).
         response = await client.post(
             "/v1/auth/login",
-            json={"email": "does-not-exist@fake-cricket.io", "password": "whatever"},
+            json={"email": _fresh_email(), "password": "whatever"},
         )
         assert response.status_code == 401
         assert response.json()["error"]["message"] == "Invalid email or password"
