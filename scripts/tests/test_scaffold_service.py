@@ -29,6 +29,17 @@ def scaffold_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> object:
     (tmp_path / "scripts").mkdir()
     shutil.copy(SCAFFOLD_SCRIPT, tmp_path / "scripts" / "scaffold_service.py")
 
+    # A pyproject.toml with the marker the scaffold script edits — otherwise
+    # _register_known_first_party will raise SystemExit.
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.ruff.lint.isort]\n"
+        "known-first-party = [\n"
+        '    "cip_core",\n'
+        '    "reference_service",\n'
+        "]\n",
+        encoding="utf-8",
+    )
+
     # Import under an isolated name so tests are hermetic.
     import importlib.util
 
@@ -90,3 +101,20 @@ class TestScaffold:
     def test_refuses_leading_hyphen(self, scaffold_module: object) -> None:
         with pytest.raises(SystemExit, match="start or end"):
             scaffold_module.scaffold("-oops")
+
+    def test_registers_known_first_party(self, scaffold_module: object) -> None:
+        """AC-M01-01: scaffolded service passes ruff without manual edits.
+
+        The registration means ``identity_service`` appears alongside our
+        other first-party packages so isort places it in the correct
+        section regardless of alphabetical ordering vs third-party names.
+        """
+        scaffold_module.scaffold("identity-service")
+        pyproject_text = (scaffold_module.REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        assert '"identity_service"' in pyproject_text
+        # Idempotent — second scaffold of a DIFFERENT service must not
+        # duplicate any existing entry.
+        scaffold_module.scaffold("billing-service")
+        pyproject_text = (scaffold_module.REPO_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        assert pyproject_text.count('"identity_service"') == 1
+        assert pyproject_text.count('"billing_service"') == 1

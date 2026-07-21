@@ -18,9 +18,10 @@ from collections.abc import AsyncIterator
 
 import pytest
 import pytest_asyncio
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+
 from cip_data.engine import build_engine, build_session_factory
 from cip_data.migrations import downgrade_base, upgrade_head
-from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 DEFAULT_URL = "postgresql+asyncpg://cip:cip@localhost:5432/cip"
 

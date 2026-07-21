@@ -10,8 +10,9 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from cip_data.base import Base, TenantScopedMixin, TimestampMixin, UUIDPKMixin
 from sqlalchemy.orm import Mapped, mapped_column
+
+from cip_data.base import Base, TenantScopedMixin, TimestampMixin, UUIDPKMixin
 
 
 class _Widget(TenantScopedMixin, Base):

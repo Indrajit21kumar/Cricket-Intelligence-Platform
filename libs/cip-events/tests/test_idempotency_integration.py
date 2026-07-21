@@ -7,6 +7,7 @@ import uuid
 
 import pytest
 import pytest_asyncio
+
 from cip_events.idempotency import RedisIdempotencyStore
 
 pytestmark = pytest.mark.integration

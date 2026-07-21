@@ -14,6 +14,7 @@ import uuid
 
 import httpx
 import pytest
+
 from cip_events import EventEnvelope, KafkaEventBus
 from reference_service.routes import DEMO_TOPIC
 

@@ -24,7 +24,6 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
 from cip_core import correlation_scope, tenant_scope
-
 from cip_events.bus import EventBus
 from cip_events.envelope import EventEnvelope
 from cip_events.idempotency import IdempotencyStore

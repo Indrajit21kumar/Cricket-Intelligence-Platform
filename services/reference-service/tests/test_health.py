@@ -7,6 +7,7 @@ against live Postgres + Redis + Kafka lives in the integration suite.
 from __future__ import annotations
 
 from fastapi.testclient import TestClient
+
 from reference_service import __version__
 from reference_service.health import router as health_router
 from reference_service.health import version_router

@@ -17,11 +17,12 @@ from __future__ import annotations
 import uuid
 
 import pytest
-from cip_core import CrossTenantAccess  # noqa: F401 — imported for symmetry
-from cip_data.engine import admin_session, tenant_session
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker
+
+from cip_core import CrossTenantAccess  # noqa: F401 — imported for symmetry
+from cip_data.engine import admin_session, tenant_session
 
 pytestmark = pytest.mark.integration
 

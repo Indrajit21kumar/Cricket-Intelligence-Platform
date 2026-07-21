@@ -10,11 +10,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from cip_data import build_engine, build_session_factory
-from cip_events import KafkaEventBus, RedisIdempotencyStore
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from cip_data import build_engine, build_session_factory
+from cip_events import KafkaEventBus, RedisIdempotencyStore
 from reference_service.settings import ServiceSettings
 
 

@@ -14,10 +14,11 @@ from collections.abc import AsyncIterator
 import httpx
 import pytest
 import pytest_asyncio
+from sqlalchemy import text
+
 from cip_data.engine import admin_session, build_engine, build_session_factory
 from cip_data.migrations import upgrade_head
 from reference_service.main import create_app
-from sqlalchemy import text
 
 
 def _database_url() -> str:

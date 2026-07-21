@@ -7,9 +7,10 @@ import uuid
 from datetime import UTC, datetime
 
 import pytest
+from pydantic import ValidationError
+
 from cip_events.envelope import EventEnvelope
 from cip_events.provenance import Provenance
-from pydantic import ValidationError
 
 
 def _valid_kwargs(**overrides: object) -> dict[str, object]:

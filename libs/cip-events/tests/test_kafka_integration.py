@@ -12,6 +12,7 @@ import uuid
 
 import pytest
 import pytest_asyncio
+
 from cip_events.envelope import EventEnvelope
 from cip_events.kafka import KafkaEventBus
 

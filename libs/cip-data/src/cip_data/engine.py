@@ -23,7 +23,6 @@ import uuid
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from cip_core import require_tenant_id
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -31,6 +30,8 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+
+from cip_core import require_tenant_id
 
 
 def build_engine(database_url: str, *, echo: bool = False) -> AsyncEngine:

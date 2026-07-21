@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import pytest
+from fastapi import Depends, FastAPI
+from fastapi.testclient import TestClient
+
 from cip_core.errors import CIPErrorCode
 from cip_core.idempotency import (
     IDEMPOTENCY_HEADER,
@@ -11,8 +14,6 @@ from cip_core.idempotency import (
     require_idempotency_key,
 )
 from cip_core.middleware import install
-from fastapi import Depends, FastAPI
-from fastapi.testclient import TestClient
 
 
 @pytest.fixture

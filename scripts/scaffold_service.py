@@ -41,6 +41,11 @@ SOURCE_NAME = "reference-service"
 def scaffold(new_name: str) -> Path:
     """Copy the reference-service into a new services/<new_name>/ directory.
 
+    Also registers the new package with ruff's ``known-first-party`` list in
+    the root ``pyproject.toml`` so imports order the same way in the
+    scaffolded service as in the template. Registers manually rather than
+    via a wildcard because ruff isort doesn't support globs in that field.
+
     Returns the path of the created service directory. Raises SystemExit
     on invalid input or if the target already exists.
     """
@@ -65,7 +70,43 @@ def scaffold(new_name: str) -> Path:
     # inside the new service.
     _substitute_tree(target, new_name=new_name, new_pkg=new_pkg)
 
+    # Register the new package with ruff isort so it groups with our other
+    # first-party packages instead of the third-party section.
+    _register_known_first_party(new_pkg)
+
     return target
+
+
+def _register_known_first_party(new_pkg: str) -> None:
+    """Insert ``new_pkg`` into the ruff ``known-first-party`` list.
+
+    Uses a regex to find the list block so repeat scaffolds don't depend on
+    any particular member being the last one. Idempotent — the string is
+    already present on repeat scaffolds of the same package.
+    """
+    import re
+
+    pyproject = REPO_ROOT / "pyproject.toml"
+    text = pyproject.read_text(encoding="utf-8")
+    if f'"{new_pkg}"' in text:
+        return
+
+    # Matches:  known-first-party = [\n    "a",\n    "b",\n]
+    # We insert the new entry as the last list item, preserving 4-space indent.
+    pattern = re.compile(
+        r"(known-first-party\s*=\s*\[\n(?:[^\]]*?))(\n\])",
+        re.MULTILINE,
+    )
+    match = pattern.search(text)
+    if match is None:
+        # Config layout has drifted from what the scaffold expects; bail
+        # loudly rather than silently mis-editing.
+        raise SystemExit(
+            "error: could not locate the known-first-party list in "
+            "pyproject.toml. Register the new package manually."
+        )
+    updated = pattern.sub(rf'\1\n    "{new_pkg}",\2', text, count=1)
+    pyproject.write_text(updated, encoding="utf-8")
 
 
 def _validate_name(name: str) -> None:

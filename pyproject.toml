@@ -39,6 +39,10 @@ dev = [
 line-length = 100
 target-version = "py312"
 extend-exclude = ["migrations/base/versions", ".venv", "docs/specs"]
+# Tell ruff which paths hold first-party code so isort splits them from
+# third-party imports (fastapi, sqlalchemy, etc.) into their own section.
+# Globs match any current or future scaffolded service without editing.
+src = ["libs/cip-core/src", "libs/cip-observability/src", "libs/cip-data/src", "libs/cip-events/src", "services"]
 
 [tool.ruff.lint]
 select = [
@@ -61,6 +65,18 @@ ignore = []
 # HTTP exception classes read naturally without the Error suffix
 # (raise NotFound("player X") mirrors FastAPI / Django conventions).
 "libs/cip-core/src/cip_core/errors.py" = ["N818"]
+
+[tool.ruff.lint.isort]
+# Every service's Python package matches the "*_service" or specific patterns
+# below. Listed explicitly so ruff isort can split them from third-party
+# imports even without the src heuristic.
+known-first-party = [
+    "cip_core",
+    "cip_observability",
+    "cip_data",
+    "cip_events",
+    "reference_service",
+]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -86,7 +102,9 @@ files = [
     "libs/cip-observability/src",
     "libs/cip-data/src",
     "libs/cip-events/src",
-    "services/reference-service/src",
+    # Glob picks up every current and future scaffolded service under services/
+    # so a new service doesn't require editing pyproject.toml.
+    "services/*/src",
 ]
 
 [[tool.mypy.overrides]]
@@ -94,10 +112,11 @@ module = "tests.*"
 disallow_untyped_defs = false
 
 # FastAPI's route decorators are typed as returning Any-ish callables, which trips
-# mypy strict's untyped-decorator rule. Allow it for the module that mounts routes;
-# the handler bodies are still strictly typed.
+# mypy strict's untyped-decorator rule. Allow it for every service's `main` and
+# `routes` modules (that's where routers are mounted); handler bodies stay
+# strictly typed. Wildcard so scaffolded services (M01 §14 Step 7) inherit it.
 [[tool.mypy.overrides]]
-module = ["reference_service.main"]
+module = ["*.main", "*.routes", "*.health"]
 disallow_untyped_decorators = false
 
 # aiokafka does not ship type stubs (or a py.typed marker) at the moment.

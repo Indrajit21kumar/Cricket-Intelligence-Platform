@@ -9,9 +9,10 @@ Verifies:
 from __future__ import annotations
 
 import pytest
-from cip_data.migrations import downgrade_base, upgrade_head
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine
+
+from cip_data.migrations import downgrade_base, upgrade_head
 
 pytestmark = pytest.mark.integration
 

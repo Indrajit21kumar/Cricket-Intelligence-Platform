@@ -19,7 +19,6 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from cip_core import Settings
-
 from cip_observability import instrumentation, logging, metrics, tracing
 from cip_observability.logging import configure as configure_logging
 from cip_observability.logging import get_logger

@@ -10,11 +10,12 @@ suite (:mod:`tests.test_tracing`).
 
 from __future__ import annotations
 
-from cip_core import Settings
-from cip_observability.metrics import get_meter
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import InMemoryMetricReader
 from opentelemetry.sdk.resources import Resource
+
+from cip_core import Settings
+from cip_observability.metrics import get_meter
 
 
 class TestGetMeter:

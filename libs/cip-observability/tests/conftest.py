@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 
 import pytest
+
 from cip_core import Settings, get_settings
 
 

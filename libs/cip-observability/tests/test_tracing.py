@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import uuid
 
-from cip_core import Settings, correlation_scope, tenant_scope
-from cip_observability.tracing import CIPContextSpanProcessor, configure
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
+
+from cip_core import Settings, correlation_scope, tenant_scope
+from cip_observability.tracing import CIPContextSpanProcessor, configure
 
 
 def _new_provider_with_exporter(

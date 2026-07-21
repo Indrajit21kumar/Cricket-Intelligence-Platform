@@ -17,6 +17,7 @@ import uuid
 
 import pytest
 import pytest_asyncio
+
 from cip_events.consumer import IdempotentConsumer
 from cip_events.envelope import EventEnvelope
 from cip_events.idempotency import RedisIdempotencyStore

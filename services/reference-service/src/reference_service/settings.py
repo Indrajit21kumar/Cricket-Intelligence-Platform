@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from cip_core import Settings as CoreSettings
 from pydantic import Field
 from pydantic_settings import SettingsConfigDict
+
+from cip_core import Settings as CoreSettings
 
 
 class ServiceSettings(CoreSettings):

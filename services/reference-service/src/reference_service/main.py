@@ -21,10 +21,10 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-import cip_core
-import cip_observability
 from fastapi import FastAPI
 
+import cip_core
+import cip_observability
 from reference_service import __version__
 from reference_service.deps import build_deps, shutdown_deps
 from reference_service.health import router as health_router

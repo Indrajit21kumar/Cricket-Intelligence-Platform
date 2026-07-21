@@ -20,9 +20,10 @@ import sys
 from typing import Any
 
 import structlog
-from cip_core import Settings, get_correlation_id, get_tenant_id
 from opentelemetry import trace
 from structlog.typing import EventDict, WrappedLogger
+
+from cip_core import Settings, get_correlation_id, get_tenant_id
 
 
 def _add_correlation_id(_logger: WrappedLogger, _name: str, event_dict: EventDict) -> EventDict:

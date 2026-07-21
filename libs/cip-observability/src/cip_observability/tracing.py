@@ -16,12 +16,13 @@ from __future__ import annotations
 import os
 from typing import Any
 
-from cip_core import Settings, get_correlation_id, get_tenant_id
 from opentelemetry import trace
 from opentelemetry.exporter.otlp.proto.grpc.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import ReadableSpan, Span, SpanProcessor, TracerProvider
 from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter
+
+from cip_core import Settings, get_correlation_id, get_tenant_id
 
 DEFAULT_OTLP_ENDPOINT = "http://localhost:4317"
 

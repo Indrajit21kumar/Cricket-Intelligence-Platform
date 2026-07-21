@@ -17,13 +17,13 @@ from __future__ import annotations
 import uuid
 from typing import Annotated
 
-from cip_core import get_correlation_id, require_idempotency_key, require_tenant_id
-from cip_data import tenant_session
-from cip_events import EventEnvelope
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
+from cip_core import get_correlation_id, require_idempotency_key, require_tenant_id
+from cip_data import tenant_session
+from cip_events import EventEnvelope
 from reference_service.deps import Deps, get_deps
 
 router = APIRouter(prefix="/v1/demo", tags=["demo"])

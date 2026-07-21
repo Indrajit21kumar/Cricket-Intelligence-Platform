@@ -17,6 +17,9 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
 from cip_core.context import get_tenant_id
 from cip_core.errors import CIPErrorCode, NotFound
 from cip_core.middleware import (
@@ -24,8 +27,6 @@ from cip_core.middleware import (
     TENANT_HEADER,
     install,
 )
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
 
 
 @pytest.fixture

@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import os
 
-from cip_core import Settings
 from opentelemetry import metrics
 from opentelemetry.exporter.otlp.proto.grpc.metric_exporter import OTLPMetricExporter
 from opentelemetry.sdk.metrics import MeterProvider
@@ -19,6 +18,8 @@ from opentelemetry.sdk.metrics.export import (
     PeriodicExportingMetricReader,
 )
 from opentelemetry.sdk.resources import Resource
+
+from cip_core import Settings
 
 DEFAULT_OTLP_ENDPOINT = "http://localhost:4317"
 
