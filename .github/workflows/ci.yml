@@ -103,16 +103,37 @@ jobs:
         with:
           version: ${{ env.UV_VERSION }}
       - run: uv sync --frozen --all-packages
+      # Redpanda needs command-line args; the GH `services:` shortcut can't
+      # pass them, so start it as a docker container in this step.
+      - name: Start Redpanda (Kafka-wire event bus)
+        run: |
+          docker run -d --name redpanda -p 9092:9092 \
+            redpandadata/redpanda:v24.2.4 \
+            redpanda start \
+              --smp=1 --memory=1G --overprovisioned --node-id=0 --check=false \
+              --kafka-addr=PLAINTEXT://0.0.0.0:9092 \
+              --advertise-kafka-addr=PLAINTEXT://localhost:9092
+          for i in {1..60}; do
+            if docker exec redpanda rpk cluster health >/dev/null 2>&1; then
+              echo "redpanda healthy after ${i}s"; break
+            fi
+            sleep 1
+          done
       - name: pytest (integration only)
         env:
           CIP_DATABASE_URL: postgresql+asyncpg://cip:cip@localhost:5432/cip
           CIP_REDIS_URL: redis://localhost:6379/0
-        # Exit code 5 = no tests collected; treat as success at Step 1.
+          CIP_KAFKA_BOOTSTRAP: localhost:9092
+        # Exit code 5 = no tests collected; treat as success (early modules
+        # may not have integration tests yet).
         run: |
           set +e
           uv run pytest -m integration
           code=$?
           if [ $code -eq 0 ] || [ $code -eq 5 ]; then exit 0; else exit $code; fi
+      - name: Redpanda logs on failure
+        if: failure()
+        run: docker logs redpanda | tail -100
 
   # ------------------------------------------------------------- 5. contract
   # Schemathesis property-tests every endpoint against FastAPI's OpenAPI schema.
