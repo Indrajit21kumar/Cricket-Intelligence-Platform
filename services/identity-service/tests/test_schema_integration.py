@@ -1,0 +1,175 @@
+"""Integration tests for the M02 identity schema (Step 1).
+
+Verifies:
+- The identity-service Alembic project applies + rolls back cleanly on top
+  of the base schema (M01 must be applied first — the base fixture handles it)
+- All 6 tables land with the expected columns
+- RLS + FORCE is enabled on ``memberships`` (the tenant-scoped table)
+- ``persons`` is global (no RLS) so the portable-identity property works
+"""
+
+from __future__ import annotations
+
+import os
+import uuid
+from collections.abc import AsyncIterator
+from pathlib import Path
+
+import pytest
+import pytest_asyncio
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
+
+from cip_data.engine import admin_session, build_engine, build_session_factory
+from cip_data.migrations import downgrade_base, upgrade_head
+
+pytestmark = pytest.mark.integration
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+IDENTITY_MIGRATIONS = REPO_ROOT / "services" / "identity-service" / "migrations"
+BASE_MIGRATIONS = REPO_ROOT / "migrations" / "base"
+
+DEFAULT_URL = "postgresql+asyncpg://cip:cip@localhost:5432/cip"
+
+
+def _database_url() -> str:
+    return os.environ.get("CIP_DATABASE_URL", DEFAULT_URL)
+
+
+@pytest.fixture(scope="module")
+def migrated_identity_schema() -> str:
+    """Apply base + identity migrations once for the module.
+
+    Rolls back at the end so other test modules (M01 RLS suite) can share
+    the same Postgres and see the same clean starting state.
+    """
+    url = _database_url()
+    # Reset to clean base.
+    downgrade_base(url, migrations_dir=IDENTITY_MIGRATIONS)
+    downgrade_base(url, migrations_dir=BASE_MIGRATIONS)
+    # Apply base first (M01), then identity (M02) on top.
+    upgrade_head(url, migrations_dir=BASE_MIGRATIONS)
+    upgrade_head(url, migrations_dir=IDENTITY_MIGRATIONS)
+    yield url
+    downgrade_base(url, migrations_dir=IDENTITY_MIGRATIONS)
+    # Leave base migration applied — other integration tests expect it.
+    # (downgrade_base of BASE is a per-session concern, not per-module.)
+
+
+@pytest_asyncio.fixture
+async def engine(migrated_identity_schema: str) -> AsyncIterator[AsyncEngine]:
+    eng = build_engine(migrated_identity_schema)
+    yield eng
+    await eng.dispose()
+
+
+@pytest.fixture
+def session_factory(engine: AsyncEngine) -> async_sessionmaker:
+    return build_session_factory(engine)
+
+
+class TestExpectedTables:
+    async def test_all_six_identity_tables_exist(self, engine: AsyncEngine) -> None:
+        async with engine.begin() as conn:
+            rows = await conn.execute(
+                text(
+                    "SELECT tablename FROM pg_tables WHERE schemaname = 'public' ORDER BY tablename"
+                )
+            )
+            tables = {row[0] for row in rows}
+        for expected in (
+            "persons",
+            "credentials",
+            "memberships",
+            "consents",
+            "tokens",
+            "guardianships",
+        ):
+            assert expected in tables, f"Missing {expected}; got {sorted(tables)}"
+
+
+class TestRLSFlags:
+    async def test_memberships_has_rls_forced(self, engine: AsyncEngine) -> None:
+        async with engine.begin() as conn:
+            row = await conn.execute(
+                text(
+                    "SELECT relrowsecurity, relforcerowsecurity "
+                    "FROM pg_class WHERE relname = 'memberships'"
+                )
+            )
+            rls_enabled, force_enabled = row.one()
+        assert rls_enabled is True
+        assert force_enabled is True
+
+    async def test_persons_has_no_rls(self, engine: AsyncEngine) -> None:
+        """persons is global — portable identity depends on being visible
+        to any tenant scope."""
+        async with engine.begin() as conn:
+            row = await conn.execute(
+                text("SELECT relrowsecurity FROM pg_class WHERE relname = 'persons'")
+            )
+            assert row.scalar() is False
+
+
+async def _make_tenant(session_factory: async_sessionmaker, name_prefix: str) -> uuid.UUID:
+    tid = uuid.uuid4()
+    name = f"{name_prefix}-{uuid.uuid4().hex[:8]}"
+    async with admin_session(session_factory) as session:
+        await session.execute(
+            text(
+                "INSERT INTO tenants (id, name, type, region) VALUES (:id, :name, 'academy', 'IN')"
+            ),
+            {"id": tid, "name": name},
+        )
+    return tid
+
+
+async def _make_person(session_factory: async_sessionmaker, email_prefix: str) -> uuid.UUID:
+    pid = uuid.uuid4()
+    async with admin_session(session_factory) as session:
+        await session.execute(
+            text("INSERT INTO persons (id, email) VALUES (:id, :email)"),
+            {"id": pid, "email": f"{email_prefix}-{uuid.uuid4().hex[:8]}@test"},
+        )
+    return pid
+
+
+class TestMembershipsRLS:
+    """AC-M02-03 setup: RLS blocks cross-tenant leaks on memberships too."""
+
+    async def test_session_a_cannot_read_tenant_b_memberships(
+        self, session_factory: async_sessionmaker
+    ) -> None:
+        from cip_data.engine import tenant_session
+
+        tenant_a = await _make_tenant(session_factory, "acad-a")
+        tenant_b = await _make_tenant(session_factory, "acad-b")
+        person_a = await _make_person(session_factory, "alice")
+        person_b = await _make_person(session_factory, "bob")
+
+        # Insert membership for alice in tenant A
+        async with tenant_session(session_factory, tenant_id=tenant_a) as session:
+            await session.execute(
+                text(
+                    "INSERT INTO memberships (id, person_id, tenant_id, role) "
+                    "VALUES (:id, :pid, :tid, 'player')"
+                ),
+                {"id": uuid.uuid4(), "pid": person_a, "tid": tenant_a},
+            )
+        # And bob in tenant B
+        async with tenant_session(session_factory, tenant_id=tenant_b) as session:
+            await session.execute(
+                text(
+                    "INSERT INTO memberships (id, person_id, tenant_id, role) "
+                    "VALUES (:id, :pid, :tid, 'player')"
+                ),
+                {"id": uuid.uuid4(), "pid": person_b, "tid": tenant_b},
+            )
+
+        # From tenant A, we see alice but never bob.
+        async with tenant_session(session_factory, tenant_id=tenant_a) as session:
+            rows = await session.execute(
+                text("SELECT person_id FROM memberships ORDER BY person_id")
+            )
+            visible = {row[0] for row in rows}
+        assert visible == {person_a}

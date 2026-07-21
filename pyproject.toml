@@ -76,6 +76,7 @@ known-first-party = [
     "cip_data",
     "cip_events",
     "reference_service",
+    "identity_service",
 ]
 
 [tool.ruff.format]
