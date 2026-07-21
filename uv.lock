@@ -339,6 +339,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
+    { name = "pyjwt" },
 ]
 
 [package.metadata]
@@ -346,6 +347,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "pydantic", specifier = ">=2.13" },
     { name = "pydantic-settings", specifier = ">=2.6" },
+    { name = "pyjwt", specifier = ">=2.10" },
 ]
 
 [[package]]

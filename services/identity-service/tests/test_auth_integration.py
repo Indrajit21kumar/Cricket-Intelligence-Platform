@@ -141,8 +141,11 @@ class TestVerifyEmail:
         login = await client.post("/v1/auth/login", json={"email": email, "password": password})
         assert login.status_code == 200
         body = login.json()
-        assert body["person_id"] == verify.json()["person_id"]
-        assert body["session_placeholder"]
+        # Step 3 replaced session_placeholder with a real (access, refresh) pair.
+        assert body["token_type"] == "Bearer"
+        assert body["access_token"]
+        assert body["refresh_token"]
+        assert body["expires_in"] > 0
 
     async def test_token_replay_blocked(self, client: httpx.AsyncClient) -> None:
         reg = await client.post(

@@ -5,6 +5,15 @@ submodule layout is an implementation detail and may change.
 """
 
 from cip_core.audit import record as audit_record
+from cip_core.auth import (
+    ACCESS_TOKEN_TYPE,
+    DEFAULT_ALGORITHM,
+    REFRESH_TOKEN_TYPE,
+    AuthenticatedPrincipal,
+    require_authenticated,
+    require_role,
+    verify_token,
+)
 from cip_core.context import (
     MissingTenantError,
     correlation_scope,
@@ -56,10 +65,14 @@ from cip_core.settings import Environment, Settings, get_settings
 __version__ = "0.1.0"
 
 __all__ = [
+    "ACCESS_TOKEN_TYPE",
     "CORRELATION_HEADER",
+    "DEFAULT_ALGORITHM",
     "IDEMPOTENCY_HEADER",
     "MAX_KEY_LENGTH",
+    "REFRESH_TOKEN_TYPE",
     "TENANT_HEADER",
+    "AuthenticatedPrincipal",
     "BadRequest",
     "CIPError",
     "CIPErrorCode",
@@ -94,7 +107,10 @@ __all__ = [
     "idempotency_key",
     "install",
     "new_correlation_id",
+    "require_authenticated",
     "require_idempotency_key",
+    "require_role",
     "require_tenant_id",
     "tenant_scope",
+    "verify_token",
 ]

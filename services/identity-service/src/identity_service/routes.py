@@ -1,31 +1,44 @@
-"""Auth routes (register / verify / login) — M02 Step 2.
+"""Auth routes — M02 Steps 2+3.
 
-The demo endpoint from the scaffold template is removed; identity's real
-API surface starts here. Later steps add:
-
-- Step 3 — JWT issuance in ``login`` + refresh + logout
-- Step 4 — RBAC on protected endpoints
-- Step 5 — /v1/memberships + /v1/me
-- Step 6 — /v1/consents + guardian flow
-- Step 7 — /v1/auth/oauth/{provider}
-- Step 8 — /v1/me/suspend, /v1/me/deletion-request, /v1/me/export-request
+- Register / verify-email / login / refresh / logout / logout-all
+- Login returns real JWTs (access + refresh) as of Step 3
+- Later steps add: RBAC (4), memberships + /me (5), consents (6),
+  OAuth (7), account lifecycle (8)
 """
 
 from __future__ import annotations
 
 import logging
 import uuid
-from datetime import date
+from datetime import UTC, datetime
+from datetime import date as date_type
 from typing import Annotated
 
+import jwt
 from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, EmailStr, Field, SecretStr
 from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from cip_core import BadRequest, Conflict, NotFound, Unauthenticated, require_idempotency_key
+from cip_core import (
+    REFRESH_TOKEN_TYPE,
+    AuthenticatedPrincipal,
+    BadRequest,
+    Conflict,
+    NotFound,
+    Unauthenticated,
+    require_authenticated,
+    require_idempotency_key,
+)
+from cip_core.settings import get_settings
 from cip_data import admin_session
 from identity_service.deps import Deps, get_deps
+from identity_service.domain.jwt_tokens import (
+    REFRESH_TTL,
+    IssuedTokens,
+    issue_tokens,
+)
 from identity_service.domain.password import Hasher
 from identity_service.domain.persons import (
     claim_token,
@@ -46,10 +59,8 @@ log = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/auth", tags=["auth"])
 
-# Process-wide hasher — safe to reuse (no per-request state).
 _hasher = Hasher()
 
-# Minor threshold — Book 0 §11.1 (COPPA/GDPR-K style bright line).
 MINOR_MAX_AGE = 18
 
 
@@ -59,7 +70,7 @@ MINOR_MAX_AGE = 18
 class RegisterRequest(BaseModel):
     email: EmailStr
     password: SecretStr = Field(..., min_length=12, max_length=200)
-    dob: date
+    dob: date_type
     display_name: str | None = Field(None, max_length=200)
 
 
@@ -90,23 +101,55 @@ class LoginRequest(BaseModel):
     password: SecretStr = Field(..., min_length=1, max_length=200)
 
 
-class LoginResponse(BaseModel):
-    person_id: uuid.UUID
-    # M02 Step 2 returns a placeholder session identifier. Step 3 replaces
-    # this shape with { access_token, refresh_token, token_type, expires_in }.
-    session_placeholder: str = Field(
-        ..., description="Replaced with real JWT access + refresh tokens in Step 3"
-    )
+class TokenResponse(BaseModel):
+    """Wire shape for /v1/auth/login and /v1/auth/refresh (Book 3 §3.1)."""
+
+    access_token: str
+    refresh_token: str
+    token_type: str = "Bearer"
+    expires_in: int = Field(..., description="Access-token lifetime in seconds")
+
+
+class RefreshRequest(BaseModel):
+    refresh_token: str = Field(..., min_length=8)
 
 
 # --- helpers ---------------------------------------------------------------
 
 
-def _dob_band(dob: date) -> str:
-    """Bucket the DOB into 'adult' or 'minor'."""
-    today = date.today()
+def _dob_band(dob: date_type) -> str:
+    today = date_type.today()
     years = today.year - dob.year - ((today.month, today.day) < (dob.month, dob.day))
     return "adult" if years >= MINOR_MAX_AGE else "minor"
+
+
+def _to_wire(tokens: IssuedTokens) -> TokenResponse:
+    return TokenResponse(
+        access_token=tokens.access_token,
+        refresh_token=tokens.refresh_token,
+        token_type=tokens.token_type,
+        expires_in=tokens.access_expires_in,
+    )
+
+
+async def _issue_and_persist_refresh(
+    session: AsyncSession,
+    *,
+    person_id: uuid.UUID,
+    roles: list[str] | None = None,
+) -> IssuedTokens:
+    """Issue an (access, refresh) pair and persist the refresh JTI so it
+    can be revoked at /v1/auth/logout."""
+    tokens = issue_tokens(person_id=person_id, roles=roles or [])
+    await store_token(
+        session,
+        person_id=person_id,
+        kind="refresh",
+        # JTI is not secret; store as-is so revocation can flip by jti.
+        token_hash=str(tokens.refresh_jti),
+        expires_at_value=datetime.now(UTC) + REFRESH_TTL,
+    )
+    return tokens
 
 
 # --- routes ---------------------------------------------------------------
@@ -166,25 +209,18 @@ async def verify_email(
     body: VerifyEmailRequest,
     deps: Annotated[Deps, Depends(get_deps)],
 ) -> VerifyEmailResponse:
-    """Consume a verification token; flip the person to ``active``.
-
-    Minors flip to ``pending_consent`` instead — a guardian consent
-    (Step 6) is required before they can log in.
-    """
+    """Consume a verification token; flip the person to ``active``."""
     async with admin_session(deps.session_factory) as session:
-        person_id = await claim_token(
-            session,
-            token_hash=hash_token(body.token),
-            kind="verify",
-        )
+        person_id = await claim_token(session, token_hash=hash_token(body.token), kind="verify")
         if person_id is None:
             raise NotFound("Verification token is invalid, expired, or already used")
 
-        person_result = await session.execute(
-            text("SELECT dob_band FROM persons WHERE id = :id"),
-            {"id": person_id},
-        )
-        row = person_result.first()
+        row = (
+            await session.execute(
+                text("SELECT dob_band FROM persons WHERE id = :id"),
+                {"id": person_id},
+            )
+        ).first()
         if row is None:
             raise NotFound("Person no longer exists")
         dob_band = row[0]
@@ -195,17 +231,15 @@ async def verify_email(
     return VerifyEmailResponse(person_id=person_id, status=new_status)
 
 
-@router.post("/login", response_model=LoginResponse)
+@router.post("/login", response_model=TokenResponse)
 async def login(
     body: LoginRequest,
     deps: Annotated[Deps, Depends(get_deps)],
-) -> LoginResponse:
-    """Verify email + password; return a session placeholder.
+) -> TokenResponse:
+    """Verify email + password; issue access + refresh JWTs (Step 3).
 
-    Same-shape 401 for both "unknown email" and "wrong password" so a caller
-    cannot use response text to enumerate accounts. Timing side-channels
-    are best-mitigated by argon2's constant-time verify + an unconditional
-    hash op on lookup miss (added when Step 8 tightens the auth path).
+    Same-shape 401 for both "unknown email" and "wrong password" — no
+    account enumeration.
     """
     invalid = Unauthenticated("Invalid email or password")
 
@@ -225,7 +259,113 @@ async def login(
         if person["status"] != "active":
             raise BadRequest(f"Account status is {person['status']!r}; cannot log in")
 
-    return LoginResponse(
-        person_id=person["id"],
-        session_placeholder=str(uuid.uuid4()),
-    )
+        # Roles land in Step 5 (memberships). For now, empty list.
+        tokens = await _issue_and_persist_refresh(session, person_id=person["id"])
+
+    return _to_wire(tokens)
+
+
+@router.post("/refresh", response_model=TokenResponse)
+async def refresh_tokens(
+    body: RefreshRequest,
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> TokenResponse:
+    """Exchange a refresh token for a fresh (access, refresh) pair.
+
+    Refresh rotation: the presented refresh is revoked and a new one is
+    issued. Prevents refresh-token theft from granting indefinite access.
+    """
+    # Verify the JWT signature + expiry + type.
+    try:
+        claims = jwt.decode(
+            body.refresh_token,
+            get_settings().build_secret_provider().get("CIP_JWT_SIGNING_KEY"),
+            algorithms=["HS256"],
+        )
+    except jwt.InvalidTokenError as exc:
+        raise Unauthenticated("Invalid or expired refresh token") from exc
+
+    if claims.get("type") != REFRESH_TOKEN_TYPE:
+        raise Unauthenticated("Not a refresh token")
+
+    jti = claims.get("jti", "")
+    person_id_raw = claims.get("sub", "")
+
+    async with admin_session(deps.session_factory) as session:
+        # Atomically revoke the presented refresh JTI. If it was already
+        # revoked (rotation replay, logout, or logout-all) claim_token
+        # returns None and we reject.
+        revoked_person = await claim_token(session, token_hash=jti, kind="refresh")
+        if revoked_person is None:
+            raise Unauthenticated("Refresh token has been revoked")
+        try:
+            person_id = uuid.UUID(person_id_raw)
+        except ValueError as exc:
+            raise Unauthenticated("Malformed subject") from exc
+        if person_id != revoked_person:
+            raise Unauthenticated("Refresh token subject mismatch")
+
+        # Issue the replacement pair. Roles remain empty until Step 5.
+        tokens = await _issue_and_persist_refresh(session, person_id=person_id)
+
+    return _to_wire(tokens)
+
+
+class LogoutResponse(BaseModel):
+    revoked_count: int
+
+
+@router.post("/logout", response_model=LogoutResponse)
+async def logout(
+    body: RefreshRequest,
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> LogoutResponse:
+    """Revoke the refresh token presented — ends this session only.
+
+    Access tokens remain valid until natural expiry (15 min max). That's
+    an acceptable trade for stateless verification; full server-side
+    revocation of access tokens would require a blocklist checked on
+    every verify (added later if the exposure window becomes a concern).
+    """
+    try:
+        claims = jwt.decode(
+            body.refresh_token,
+            get_settings().build_secret_provider().get("CIP_JWT_SIGNING_KEY"),
+            algorithms=["HS256"],
+            options={"verify_exp": False},  # allow revoking already-expired sessions
+        )
+    except jwt.InvalidTokenError as exc:
+        raise Unauthenticated("Invalid refresh token") from exc
+
+    async with admin_session(deps.session_factory) as session:
+        result = await session.execute(
+            text(
+                "UPDATE tokens SET revoked = true "
+                "WHERE token_hash = :jti AND kind = 'refresh' AND revoked = false "
+                "RETURNING id"
+            ),
+            {"jti": claims.get("jti", "")},
+        )
+        return LogoutResponse(revoked_count=len(result.fetchall()))
+
+
+@router.post("/logout-all", response_model=LogoutResponse)
+async def logout_all(
+    deps: Annotated[Deps, Depends(get_deps)],
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+) -> LogoutResponse:
+    """Revoke every refresh token for the authenticated person.
+
+    Requires a valid access token — you have to be currently authed to
+    invalidate all sessions.
+    """
+    async with admin_session(deps.session_factory) as session:
+        result = await session.execute(
+            text(
+                "UPDATE tokens SET revoked = true "
+                "WHERE person_id = :pid AND kind = 'refresh' AND revoked = false "
+                "RETURNING id"
+            ),
+            {"pid": principal.person_id},
+        )
+        return LogoutResponse(revoked_count=len(result.fetchall()))

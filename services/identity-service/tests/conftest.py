@@ -16,9 +16,25 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+from cip_core.settings import get_settings
 from cip_data.engine import admin_session, build_engine, build_session_factory
 from cip_data.migrations import upgrade_head
 from identity_service.main import create_app
+
+TEST_JWT_SECRET = "test-jwt-signing-key-do-not-use-in-any-real-environment-42"
+
+
+@pytest.fixture(autouse=True)
+def _pin_jwt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Every identity-service test uses a deterministic JWT signing key.
+
+    Without this the JWT-issuing routes 500 out on `SecretNotFoundError`
+    for CIP_JWT_SIGNING_KEY. Clearing the settings cache ensures each
+    test re-reads the environment.
+    """
+    monkeypatch.setenv("CIP_JWT_SIGNING_KEY", TEST_JWT_SECRET)
+    monkeypatch.setenv("CIP_SECRET_PROVIDER", "env")
+    get_settings.cache_clear()
 
 
 def _database_url() -> str:

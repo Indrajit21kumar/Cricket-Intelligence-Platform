@@ -12,6 +12,7 @@ async-autouse fixture pitfalls with pytest-asyncio.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import uuid
 from collections.abc import AsyncIterator
@@ -48,10 +49,8 @@ def _downgrade_all_services(url: str) -> None:
     for svc in services_dir.iterdir():
         migrations = svc / "migrations"
         if migrations.is_dir() and (migrations / "alembic.ini").exists():
-            try:
+            with contextlib.suppress(Exception):
                 downgrade_base(url, migrations_dir=migrations)
-            except Exception:  # noqa: BLE001 — best-effort cleanup
-                pass
 
 
 @pytest.fixture(scope="session")

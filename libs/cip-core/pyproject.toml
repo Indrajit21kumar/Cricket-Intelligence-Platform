@@ -8,6 +8,7 @@ dependencies = [
     "pydantic>=2.13",
     "pydantic-settings>=2.6",
     "fastapi>=0.115",
+    "pyjwt>=2.10",
 ]
 
 [build-system]
