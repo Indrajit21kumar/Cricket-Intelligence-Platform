@@ -36,6 +36,14 @@ class ServiceSettings(CoreSettings):
         description="Redis URL for the idempotency store",
     )
 
+    # OAuth / SSO (Step 7). Empty by default — a provider only activates
+    # when both its id + secret are configured. Secrets belong in the
+    # managed secret store in prod; env here for local dev.
+    google_client_id: str = Field("", description="Google OAuth client id")
+    google_client_secret: str = Field("", description="Google OAuth client secret")
+    microsoft_client_id: str = Field("", description="Microsoft OAuth client id")
+    microsoft_client_secret: str = Field("", description="Microsoft OAuth client secret")
+
 
 @lru_cache(maxsize=1)
 def get_service_settings() -> ServiceSettings:

@@ -21,6 +21,7 @@ from identity_service.health import router as health_router
 from identity_service.health import version_router
 from identity_service.lifecycle_routes import lifecycle_router
 from identity_service.memberships_routes import me_router, membership_router
+from identity_service.oauth_routes import oauth_router
 from identity_service.routes import router as auth_router
 from identity_service.settings import get_service_settings
 
@@ -58,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(guardianship_router)
     app.include_router(consent_router)
     app.include_router(lifecycle_router)
+    app.include_router(oauth_router)
 
     return app
 

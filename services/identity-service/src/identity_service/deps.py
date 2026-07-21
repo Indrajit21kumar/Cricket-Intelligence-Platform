@@ -16,6 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
+from identity_service.domain.oauth import (
+    OAuthProvider,
+    google_provider,
+    microsoft_provider,
+)
 from identity_service.settings import ServiceSettings
 
 
@@ -30,6 +35,22 @@ class Deps:
     idempotency_store: RedisIdempotencyStore
     #: Raw Redis client for the brute-force lockout counters (Step 8).
     redis: aioredis.Redis
+    #: Configured OAuth providers by name (Step 7). Empty if no credentials.
+    oauth_providers: dict[str, OAuthProvider]
+
+
+def _build_oauth_providers(settings: ServiceSettings) -> dict[str, OAuthProvider]:
+    """Register only the providers whose credentials are configured."""
+    providers: dict[str, OAuthProvider] = {}
+    if settings.google_client_id and settings.google_client_secret:
+        providers["google"] = google_provider(
+            settings.google_client_id, settings.google_client_secret
+        )
+    if settings.microsoft_client_id and settings.microsoft_client_secret:
+        providers["microsoft"] = microsoft_provider(
+            settings.microsoft_client_id, settings.microsoft_client_secret
+        )
+    return providers
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -47,6 +68,7 @@ async def build_deps(settings: ServiceSettings) -> Deps:
         event_bus=event_bus,
         idempotency_store=idempotency_store,
         redis=redis,
+        oauth_providers=_build_oauth_providers(settings),
     )
 
 
