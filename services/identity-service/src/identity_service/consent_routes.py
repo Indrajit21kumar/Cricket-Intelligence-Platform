@@ -26,6 +26,7 @@ from cip_core import (
     BadRequest,
     Forbidden,
     NotFound,
+    audit_record,
     require_authenticated,
     require_idempotency_key,
 )
@@ -164,6 +165,13 @@ async def create_consent_endpoint(
             scope=body.scope,
         )
         new_status = await activate_minor_if_eligible(session, minor_person_id=body.minor_person_id)
+        await audit_record(
+            session,
+            action="consent.granted",
+            entity=f"person:{body.minor_person_id}",
+            actor=f"person:{principal.person_id}",
+            meta={"type": body.type, "consent_id": str(consent_id)},
+        )
 
     return ConsentView(
         id=consent_id,
@@ -192,6 +200,13 @@ async def withdraw_consent_endpoint(
             new_status = await restrict_minor_if_consent_lost(
                 session, minor_person_id=minor_person_id
             )
+        await audit_record(
+            session,
+            action="consent.withdrawn",
+            entity=f"person:{minor_person_id}",
+            actor=f"person:{principal.person_id}",
+            meta={"consent_id": str(consent_id)},
+        )
 
     return WithdrawView(
         consent_id=consent_id,

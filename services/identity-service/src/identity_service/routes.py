@@ -27,7 +27,9 @@ from cip_core import (
     BadRequest,
     Conflict,
     NotFound,
+    RateLimited,
     Unauthenticated,
+    audit_record,
     require_authenticated,
     require_idempotency_key,
     require_role,
@@ -36,6 +38,7 @@ from cip_core import (
 from cip_core.settings import get_settings
 from cip_data import admin_session
 from identity_service.deps import Deps, get_deps
+from identity_service.domain import lockout
 from identity_service.domain.jwt_tokens import (
     REFRESH_TTL,
     IssuedTokens,
@@ -200,9 +203,11 @@ async def register(
     except IntegrityError as exc:
         raise Conflict("Email already registered") from exc
 
+    # Log by person_id only — email is PII and MUST NOT be logged (Book 3
+    # §5.2, AC-M02-06).
     log.info(
         "identity.verification.token_issued",
-        extra={"person_id": str(person_id), "email": body.email},
+        extra={"person_id": str(person_id)},
     )
     return RegisterResponse(
         person_id=person_id,
@@ -243,22 +248,37 @@ async def login(
     body: LoginRequest,
     deps: Annotated[Deps, Depends(get_deps)],
 ) -> TokenResponse:
-    """Verify email + password; issue access + refresh JWTs (Step 3).
+    """Verify email + password; issue access + refresh JWTs.
 
     Same-shape 401 for both "unknown email" and "wrong password" — no
-    account enumeration.
+    account enumeration. Brute-force protected: too many failures locks the
+    account for a window (AC-M02-05), checked before the password.
     """
     invalid = Unauthenticated("Invalid email or password")
+
+    # Brute-force gate (AC-M02-05) — reject locked accounts up front.
+    if await lockout.is_locked(deps.redis, body.email):
+        raise RateLimited(
+            "Too many failed login attempts. Try again later.",
+        )
+
+    async def _fail() -> None:
+        """Record a failed attempt; raise the generic 401 (or 429 on lock)."""
+        locked = await lockout.record_failure(deps.redis, body.email)
+        if locked:
+            raise RateLimited("Too many failed login attempts. Try again later.")
+        raise invalid
 
     async with admin_session(deps.session_factory) as session:
         person = await get_person_by_email(session, body.email)
         if person is None:
-            raise invalid
+            await _fail()
+        assert person is not None
         password_hash = await get_password_hash(session, person["id"])
         if password_hash is None:
-            raise invalid
-        if not _hasher.verify(password_hash, body.password.get_secret_value()):
-            raise invalid
+            await _fail()
+        if not _hasher.verify(password_hash or "", body.password.get_secret_value()):
+            await _fail()
         if person["status"] == "pending_verification":
             raise BadRequest("Email is not yet verified")
         if person["status"] == "pending_consent":
@@ -266,9 +286,16 @@ async def login(
         if person["status"] != "active":
             raise BadRequest(f"Account status is {person['status']!r}; cannot log in")
 
-        # Roles land in Step 5 (memberships). For now, empty list.
         tokens = await _issue_and_persist_refresh(session, person_id=person["id"])
+        await audit_record(
+            session,
+            action="auth.login",
+            entity=f"person:{person['id']}",
+            actor=f"person:{person['id']}",
+        )
 
+    # Successful login clears the failure counter.
+    await lockout.clear(deps.redis, body.email)
     return _to_wire(tokens)
 
 

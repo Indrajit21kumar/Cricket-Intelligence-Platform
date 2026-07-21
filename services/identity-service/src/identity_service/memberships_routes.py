@@ -21,11 +21,12 @@ from cip_core import (
     BadRequest,
     Forbidden,
     NotFound,
+    audit_record,
     require_authenticated,
     require_idempotency_key,
     roles,
 )
-from cip_data import admin_session
+from cip_data import admin_session, tenant_session
 from identity_service.deps import Deps, get_deps
 from identity_service.domain.memberships import (
     create_membership,
@@ -105,14 +106,24 @@ async def create_membership_endpoint(
         )
 
     try:
-        # memberships has no RLS (identity-service is the sole owner and
-        # needs cross-tenant access); use admin_session.
-        async with admin_session(deps.session_factory) as session:
+        # A role grant is a tenant-scoped event, so we write it under a
+        # tenant_session bound to that tenant. That sets the cip.tenant_id
+        # GUC so the tenant-scoped audit_log row passes its WITH CHECK
+        # policy. memberships itself has no RLS, so the insert is unaffected.
+        async with tenant_session(deps.session_factory, tenant_id=body.tenant_id) as session:
             membership_id = await create_membership(
                 session,
                 person_id=principal.person_id,
                 tenant_id=body.tenant_id,
                 role=body.role,
+            )
+            await audit_record(
+                session,
+                action="membership.role_granted",
+                entity=f"person:{principal.person_id}",
+                actor=f"person:{principal.person_id}",
+                tenant_id=body.tenant_id,
+                meta={"role": body.role, "membership_id": str(membership_id)},
             )
     except IntegrityError as exc:
         # Either the tenant doesn't exist (FK), the person doesn't exist,
@@ -143,15 +154,30 @@ async def leave_tenant(
     membership. Same person can only delete their own — enforced by an
     explicit person_id check.
     """
+    # Look up the membership first (cross-tenant read) to get its tenant_id
+    # and enforce ownership.
     async with admin_session(deps.session_factory) as session:
         row = await get_membership(session, membership_id=membership_id)
-        if row is None:
-            raise NotFound(f"Membership {membership_id} not found")
-        if row["person_id"] != principal.person_id:
-            # Deny-by-default — tenant admins revoking someone else's
-            # membership is a separate admin endpoint (follow-up work).
-            raise Forbidden("You may only leave your own memberships")
+    if row is None:
+        raise NotFound(f"Membership {membership_id} not found")
+    if row["person_id"] != principal.person_id:
+        # Deny-by-default — tenant admins revoking someone else's
+        # membership is a separate admin endpoint (follow-up work).
+        raise Forbidden("You may only leave your own memberships")
+
+    # Delete + audit under a tenant_session for that tenant so the
+    # tenant-scoped audit row passes WITH CHECK.
+    async with tenant_session(deps.session_factory, tenant_id=row["tenant_id"]) as session:
         deleted = await delete_membership(session, membership_id=membership_id)
+        if deleted:
+            await audit_record(
+                session,
+                action="membership.role_revoked",
+                entity=f"person:{principal.person_id}",
+                actor=f"person:{principal.person_id}",
+                tenant_id=row["tenant_id"],
+                meta={"membership_id": str(membership_id), "role": row["role"]},
+            )
     if not deleted:
         # Rare race: someone else deleted between our lookup and delete.
         raise NotFound(f"Membership {membership_id} not found")

@@ -20,7 +20,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from cip_core.context import get_correlation_id, require_tenant_id
+from cip_core.context import get_correlation_id, get_tenant_id
 
 
 async def record(
@@ -30,24 +30,27 @@ async def record(
     entity: str,
     actor: str,
     meta: dict[str, Any] | None = None,
+    tenant_id: uuid.UUID | None = None,
 ) -> uuid.UUID:
-    """Write a row to ``audit_log`` under the current tenant + correlation.
+    """Write a row to ``audit_log`` for a sensitive action.
 
-    ``session`` MUST be a tenant-scoped session (built via
-    :func:`cip_data.tenant_session`) so the row lands under the correct
-    tenant and passes the RLS WITH CHECK policy.
+    ``tenant_id`` resolution: the explicit argument wins; otherwise the
+    current request's tenant scope is used; otherwise the row is a
+    PLATFORM-level (global) audit event with ``tenant_id = NULL`` — used by
+    identity actions (registration, consent, deletion) that belong to a
+    person rather than a tenant. The audit_log RLS policy admits NULL-tenant
+    rows platform-wide (migration 0002).
 
     ``action``  — verb of what happened (e.g. ``"role.granted"``,
-                  ``"minor.data.exported"``).
-    ``entity``  — the affected resource (e.g. ``"player:abc-123"``,
-                  ``"tenant:foo"``).
-    ``actor``   — who did it (a user_ref, service name, or system id).
+                  ``"account.deletion_requested"``).
+    ``entity``  — the affected resource (e.g. ``"person:abc-123"``).
+    ``actor``   — who did it (a person id, service name, or system id).
     ``meta``    — optional JSON payload for extra context.
 
     Returns the generated audit row id.
     """
     audit_id = uuid.uuid4()
-    tenant_id = require_tenant_id()
+    effective_tenant = tenant_id if tenant_id is not None else get_tenant_id()
     correlation_id = get_correlation_id()
 
     await session.execute(
@@ -60,7 +63,7 @@ async def record(
         ),
         {
             "id": audit_id,
-            "tid": tenant_id,
+            "tid": effective_tenant,
             "actor": actor,
             "action": action,
             "entity": entity,

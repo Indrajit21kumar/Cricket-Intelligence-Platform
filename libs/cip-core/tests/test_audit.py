@@ -12,8 +12,6 @@ import json
 import uuid
 from typing import Any
 
-import pytest
-
 from cip_core.audit import record
 from cip_core.context import correlation_scope, tenant_scope
 
@@ -77,15 +75,29 @@ class TestRecord:
         loaded = json.loads(session.executed[0][1]["meta"])
         assert loaded == {"linked_to": str(related_id)}
 
-    async def test_no_tenant_context_raises(self) -> None:
-        from cip_core.context import MissingTenantError
-
+    async def test_no_tenant_context_writes_platform_row(self) -> None:
+        """Without a tenant scope, the row is a platform-level audit event
+        (tenant_id = None). Identity actions rely on this (Step 8)."""
         session = FakeSession()
-        with correlation_scope("c1"), pytest.raises(MissingTenantError):
+        with correlation_scope("c1"):
             await record(
                 session,  # type: ignore[arg-type]
-                action="a",
-                entity="e",
-                actor="ac",
+                action="account.deletion_requested",
+                entity="person:abc",
+                actor="person:abc",
             )
-        assert session.executed == []
+        assert len(session.executed) == 1
+        assert session.executed[0][1]["tid"] is None
+
+    async def test_explicit_tenant_id_wins(self) -> None:
+        session = FakeSession()
+        explicit = uuid.uuid4()
+        with correlation_scope("c1"):
+            await record(
+                session,  # type: ignore[arg-type]
+                action="membership.role_granted",
+                entity="person:abc",
+                actor="person:abc",
+                tenant_id=explicit,
+            )
+        assert session.executed[0][1]["tid"] == explicit

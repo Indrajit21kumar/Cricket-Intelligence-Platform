@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import redis.asyncio as aioredis
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
@@ -27,6 +28,8 @@ class Deps:
     session_factory: async_sessionmaker[AsyncSession]
     event_bus: KafkaEventBus
     idempotency_store: RedisIdempotencyStore
+    #: Raw Redis client for the brute-force lockout counters (Step 8).
+    redis: aioredis.Redis
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -36,12 +39,14 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     event_bus = KafkaEventBus(bootstrap_servers=settings.kafka_bootstrap)
     await event_bus.start()
     idempotency_store = RedisIdempotencyStore(settings.redis_url)
+    redis = aioredis.from_url(settings.redis_url, decode_responses=True)
     return Deps(
         settings=settings,
         engine=engine,
         session_factory=session_factory,
         event_bus=event_bus,
         idempotency_store=idempotency_store,
+        redis=redis,
     )
 
 
@@ -49,6 +54,7 @@ async def shutdown_deps(deps: Deps) -> None:
     """Reverse of :func:`build_deps` — close every open connection."""
     await deps.event_bus.stop()
     await deps.idempotency_store.close()
+    await deps.redis.aclose()
     await deps.engine.dispose()
 
 
