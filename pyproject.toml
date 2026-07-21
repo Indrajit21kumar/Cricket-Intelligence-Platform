@@ -113,7 +113,7 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 minversion = "8.0"
 asyncio_mode = "auto"
-testpaths = ["libs", "services"]
+testpaths = ["libs", "services", "scripts/tests"]
 # importlib mode lets multiple packages have identically-named test files
 # (e.g. tests/test_smoke.py in each lib) without collection collisions.
 addopts = "-ra --strict-markers --strict-config --import-mode=importlib"

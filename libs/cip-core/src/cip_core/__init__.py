@@ -4,6 +4,7 @@ Public API stabilised in M01 Step 2. Import from the top-level package; the
 submodule layout is an implementation detail and may change.
 """
 
+from cip_core.audit import record as audit_record
 from cip_core.context import (
     MissingTenantError,
     correlation_scope,
@@ -84,6 +85,7 @@ __all__ = [
     "Unauthenticated",
     "Unprocessable",
     "__version__",
+    "audit_record",
     "build_provider",
     "correlation_scope",
     "get_correlation_id",
