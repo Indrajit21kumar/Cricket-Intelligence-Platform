@@ -58,6 +58,9 @@ ignore = []
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
 "**/__init__.py" = ["F401"]
+# HTTP exception classes read naturally without the Error suffix
+# (raise NotFound("player X") mirrors FastAPI / Django conventions).
+"libs/cip-core/src/cip_core/errors.py" = ["N818"]
 
 [tool.ruff.format]
 quote-style = "double"
@@ -69,6 +72,7 @@ indent-style = "space"
 [tool.mypy]
 python_version = "3.12"
 strict = true
+plugins = ["pydantic.mypy"]
 warn_return_any = true
 warn_unused_ignores = true
 warn_redundant_casts = true
