@@ -100,6 +100,13 @@ disallow_untyped_defs = false
 module = ["reference_service.main"]
 disallow_untyped_decorators = false
 
+# aiokafka does not ship type stubs (or a py.typed marker) at the moment.
+# Treat its symbols as Any rather than blocking the build; the wrapper in
+# cip_events.kafka is thin enough that this doesn't hide real bugs.
+[[tool.mypy.overrides]]
+module = ["aiokafka", "aiokafka.*"]
+ignore_missing_imports = true
+
 # ---------------------------------------------------------------------------
 # pytest (Book 3, Ch. 6 §6.1)
 # ---------------------------------------------------------------------------

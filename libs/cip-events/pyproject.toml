@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "CIP event-bus client: Kafka-wire pub/sub, idempotent consumer, DLQ."
 requires-python = ">=3.12,<3.13"
 readme = "README.md"
-dependencies = []
+dependencies = [
+    "cip-core",
+    "aiokafka>=0.12",
+    "redis[hiredis]>=5.2",
+    "pydantic>=2.13",
+]
 
 [build-system]
 requires = ["hatchling"]
