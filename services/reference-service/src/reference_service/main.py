@@ -1,41 +1,74 @@
 """FastAPI entrypoint for the CIP reference service.
 
-Step 1 exposes only the three endpoints the module spec (§9) mandates:
-liveness, readiness, and internal version. Real middleware (tenancy,
-correlation, error envelope) and real dependency checks (DB, Kafka, Redis)
-are wired in during M01 Step 6.
+Every CIP service follows this shape:
+
+1. Build service :class:`ServiceSettings` (env + secret store).
+2. Install ``cip-core`` middleware + exception handlers on the FastAPI app.
+3. Install ``cip-observability`` (logs + traces + metrics + FastAPI/SQLAlchemy
+   instrumentation).
+4. In the lifespan, build the runtime :class:`Deps` (DB engine, event bus,
+   idempotency store) and stash them on ``app.state``. Shut them down on
+   exit.
+5. Mount routers.
+
+New services scaffolded from this template inherit the same structure so
+Book 3's cross-cutting requirements are satisfied by construction, per
+M01 §1.
 """
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+import cip_core
+import cip_observability
 from fastapi import FastAPI
 
 from reference_service import __version__
-
-app = FastAPI(
-    title="CIP reference-service",
-    version=__version__,
-    description="Template service. Health + version endpoints only in Step 1.",
-)
-
-
-@app.get("/health/live", tags=["health"])
-def health_live() -> dict[str, str]:
-    """Liveness probe: the process is up."""
-    return {"status": "live"}
+from reference_service.deps import build_deps, shutdown_deps
+from reference_service.health import router as health_router
+from reference_service.health import version_router
+from reference_service.routes import router as demo_router
+from reference_service.settings import get_service_settings
 
 
-@app.get("/health/ready", tags=["health"])
-def health_ready() -> dict[str, str]:
-    """Readiness probe: dependencies are reachable.
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    settings = get_service_settings()
+    deps = await build_deps(settings)
+    app.state.deps = deps
+    try:
+        yield
+    finally:
+        await shutdown_deps(deps)
 
-    Step 1 has no dependencies to check; Step 6 replaces this with real
-    DB / Kafka / Redis probes.
-    """
-    return {"status": "ready"}
+
+def create_app() -> FastAPI:
+    """Factory — importable for tests, ASGI servers, and scaffolded services."""
+    settings = get_service_settings()
+
+    app = FastAPI(
+        title="CIP reference-service",
+        version=__version__,
+        description=(
+            "Template service. Wires cip-core middleware, cip-observability "
+            "(logs + traces + metrics), cip-data (async SQLAlchemy + RLS), "
+            "and cip-events (Kafka-wire pub/sub + idempotent consumer)."
+        ),
+        lifespan=lifespan,
+    )
+
+    # Order matters: middleware wraps every route, exception handlers
+    # produce the standard error envelope, observability instruments the app.
+    cip_core.install(app)
+    cip_observability.configure_all(settings, app=app)
+
+    app.include_router(health_router)
+    app.include_router(version_router)
+    app.include_router(demo_router)
+
+    return app
 
 
-@app.get("/internal/version", tags=["internal"])
-def internal_version() -> dict[str, str]:
-    """Build/version info for platform ops."""
-    return {"service": "reference-service", "version": __version__}
+app = create_app()
