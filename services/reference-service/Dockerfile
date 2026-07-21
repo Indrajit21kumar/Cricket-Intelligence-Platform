@@ -1,6 +1,6 @@
 # Multi-stage build for reference-service.
 # Stage 1 pulls uv + workspace deps; Stage 2 produces a slim runtime image.
-FROM python:3.12-slim AS build
+FROM python:3.14-slim AS build
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -19,7 +19,7 @@ COPY services/reference-service/ ./services/reference-service/
 RUN uv sync --frozen --no-dev --package reference-service
 
 # --- Runtime image ---
-FROM python:3.12-slim AS runtime
+FROM python:3.14-slim AS runtime
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
