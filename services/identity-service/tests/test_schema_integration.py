@@ -89,17 +89,18 @@ class TestExpectedTables:
 
 
 class TestRLSFlags:
-    async def test_memberships_has_rls_forced(self, engine: AsyncEngine) -> None:
+    async def test_memberships_has_no_rls(self, engine: AsyncEngine) -> None:
+        """memberships is intentionally NOT RLS-protected.
+
+        Identity-service is the sole owner and needs cross-tenant reads
+        (JWT roles claim + /v1/me). Tenant isolation for this table is
+        enforced at the JWT + RBAC layer.
+        """
         async with engine.begin() as conn:
             row = await conn.execute(
-                text(
-                    "SELECT relrowsecurity, relforcerowsecurity "
-                    "FROM pg_class WHERE relname = 'memberships'"
-                )
+                text("SELECT relrowsecurity FROM pg_class WHERE relname = 'memberships'")
             )
-            rls_enabled, force_enabled = row.one()
-        assert rls_enabled is True
-        assert force_enabled is True
+            assert row.scalar() is False
 
     async def test_persons_has_no_rls(self, engine: AsyncEngine) -> None:
         """persons is global — portable identity depends on being visible
@@ -134,21 +135,18 @@ async def _make_person(session_factory: async_sessionmaker, email_prefix: str) -
     return pid
 
 
-class TestMembershipsRLS:
-    """AC-M02-03 setup: RLS blocks cross-tenant leaks on memberships too."""
+class TestMembershipsIsCrossTenant:
+    """memberships is cross-tenant by design (identity-service owns it)."""
 
-    async def test_session_a_cannot_read_tenant_b_memberships(
+    async def test_admin_session_sees_all_tenants(
         self, session_factory: async_sessionmaker
     ) -> None:
-        from cip_data.engine import tenant_session
-
         tenant_a = await _make_tenant(session_factory, "acad-a")
         tenant_b = await _make_tenant(session_factory, "acad-b")
         person_a = await _make_person(session_factory, "alice")
         person_b = await _make_person(session_factory, "bob")
 
-        # Insert membership for alice in tenant A
-        async with tenant_session(session_factory, tenant_id=tenant_a) as session:
+        async with admin_session(session_factory) as session:
             await session.execute(
                 text(
                     "INSERT INTO memberships (id, person_id, tenant_id, role) "
@@ -156,8 +154,6 @@ class TestMembershipsRLS:
                 ),
                 {"id": uuid.uuid4(), "pid": person_a, "tid": tenant_a},
             )
-        # And bob in tenant B
-        async with tenant_session(session_factory, tenant_id=tenant_b) as session:
             await session.execute(
                 text(
                     "INSERT INTO memberships (id, person_id, tenant_id, role) "
@@ -166,10 +162,10 @@ class TestMembershipsRLS:
                 {"id": uuid.uuid4(), "pid": person_b, "tid": tenant_b},
             )
 
-        # From tenant A, we see alice but never bob.
-        async with tenant_session(session_factory, tenant_id=tenant_a) as session:
+        # Cross-tenant read succeeds — needed for JWT roles + /v1/me.
+        async with admin_session(session_factory) as session:
             rows = await session.execute(
                 text("SELECT person_id FROM memberships ORDER BY person_id")
             )
             visible = {row[0] for row in rows}
-        assert visible == {person_a}
+        assert {person_a, person_b}.issubset(visible)

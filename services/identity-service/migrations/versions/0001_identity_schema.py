@@ -40,7 +40,13 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 
-TENANT_SCOPED_TABLES = ("memberships",)  # consents stays global for M02
+# memberships is intentionally NOT under RLS: identity-service is the sole
+# owner of this table and needs cross-tenant reads (list all a person's
+# roles for the JWT roles claim + /v1/me). Tenant isolation for this table
+# is enforced at the JWT + RBAC layer, not at the row layer. Other tables
+# with tenant_id (consents when it becomes tenant-scoped, audit rows, etc.)
+# still use RLS.
+TENANT_SCOPED_TABLES: tuple[str, ...] = ()
 
 
 def upgrade() -> None:
@@ -263,8 +269,15 @@ def upgrade() -> None:
         op.execute(tenant_isolation_policy_sql(table))
         op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO cip_app")
 
-    # Grant privileges on the global tables to cip_app too.
-    for table in ("persons", "credentials", "consents", "tokens", "guardianships"):
+    # Grant privileges on every M02 table to cip_app.
+    for table in (
+        "persons",
+        "credentials",
+        "memberships",  # no RLS but still needs role grants
+        "consents",
+        "tokens",
+        "guardianships",
+    ):
         op.execute(f"GRANT SELECT, INSERT, UPDATE, DELETE ON {table} TO cip_app")
 
 

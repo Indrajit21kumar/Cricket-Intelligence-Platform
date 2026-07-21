@@ -41,6 +41,7 @@ from identity_service.domain.jwt_tokens import (
     IssuedTokens,
     issue_tokens,
 )
+from identity_service.domain.memberships import list_roles_for_person
 from identity_service.domain.password import Hasher
 from identity_service.domain.persons import (
     claim_token,
@@ -138,11 +139,15 @@ async def _issue_and_persist_refresh(
     session: AsyncSession,
     *,
     person_id: uuid.UUID,
-    roles: list[str] | None = None,
 ) -> IssuedTokens:
-    """Issue an (access, refresh) pair and persist the refresh JTI so it
-    can be revoked at /v1/auth/logout."""
-    tokens = issue_tokens(person_id=person_id, roles=roles or [])
+    """Issue an (access, refresh) pair and persist the refresh JTI.
+
+    Looks up the person's current active roles from memberships so the
+    JWT's ``roles`` claim reflects live tenant assignments — Step 5's
+    contribution to the auth path.
+    """
+    person_roles = await list_roles_for_person(session, person_id=person_id)
+    tokens = issue_tokens(person_id=person_id, roles=person_roles)
     await store_token(
         session,
         person_id=person_id,
