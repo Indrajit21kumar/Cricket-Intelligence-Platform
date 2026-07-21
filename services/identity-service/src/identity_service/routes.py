@@ -273,7 +273,7 @@ async def login(
         person = await get_person_by_email(session, body.email)
         if person is None:
             await _fail()
-        assert person is not None
+            raise invalid  # unreachable — _fail() always raises; narrows type
         password_hash = await get_password_hash(session, person["id"])
         if password_hash is None:
             await _fail()

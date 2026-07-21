@@ -107,23 +107,25 @@ class _OidcProvider:
 
 
 def google_provider(client_id: str, client_secret: str) -> OAuthProvider:
+    # nosec B106: token_endpoint is a public OIDC URL, not a password.
     return _OidcProvider(
         name="google",
         client_id=client_id,
         client_secret=client_secret,
         authorize_endpoint="https://accounts.google.com/o/oauth2/v2/auth",
-        token_endpoint="https://oauth2.googleapis.com/token",
+        token_endpoint="https://oauth2.googleapis.com/token",  # nosec B106
         userinfo_endpoint="https://openidconnect.googleapis.com/v1/userinfo",
     )
 
 
 def microsoft_provider(client_id: str, client_secret: str) -> OAuthProvider:
+    # nosec B106: token_endpoint is a public OIDC URL, not a password.
     return _OidcProvider(
         name="microsoft",
         client_id=client_id,
         client_secret=client_secret,
         authorize_endpoint="https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
-        token_endpoint="https://login.microsoftonline.com/common/oauth2/v2.0/token",
+        token_endpoint="https://login.microsoftonline.com/common/oauth2/v2.0/token",  # nosec B106
         userinfo_endpoint="https://graph.microsoft.com/oidc/userinfo",
     )
 
