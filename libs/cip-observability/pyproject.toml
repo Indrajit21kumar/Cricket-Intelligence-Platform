@@ -4,7 +4,17 @@ version = "0.1.0"
 description = "CIP observability baseline: structlog + OpenTelemetry logs/metrics/traces."
 requires-python = ">=3.12,<3.13"
 readme = "README.md"
-dependencies = []
+dependencies = [
+    "cip-core",
+    "structlog>=24.4",
+    "opentelemetry-api>=1.28",
+    "opentelemetry-sdk>=1.28",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.28",
+    # FastAPI instrumentor lives here — every CIP service is a FastAPI app.
+    # SQLAlchemy / httpx / aiokafka instrumentors come in with the libraries
+    # that use them (cip-data etc.); install() below try/except-imports them.
+    "opentelemetry-instrumentation-fastapi>=0.49b0",
+]
 
 [build-system]
 requires = ["hatchling"]
