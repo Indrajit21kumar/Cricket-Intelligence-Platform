@@ -4,6 +4,7 @@ Public API stabilised in M01 Step 2. Import from the top-level package; the
 submodule layout is an implementation detail and may change.
 """
 
+from cip_core import roles
 from cip_core.audit import record as audit_record
 from cip_core.auth import (
     ACCESS_TOKEN_TYPE,
@@ -111,6 +112,7 @@ __all__ = [
     "require_idempotency_key",
     "require_role",
     "require_tenant_id",
+    "roles",
     "tenant_scope",
     "verify_token",
 ]

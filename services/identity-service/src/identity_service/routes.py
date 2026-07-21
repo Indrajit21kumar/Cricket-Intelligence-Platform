@@ -30,6 +30,8 @@ from cip_core import (
     Unauthenticated,
     require_authenticated,
     require_idempotency_key,
+    require_role,
+    roles,
 )
 from cip_core.settings import get_settings
 from cip_data import admin_session
@@ -347,6 +349,32 @@ async def logout(
             {"jti": claims.get("jti", "")},
         )
         return LogoutResponse(revoked_count=len(result.fetchall()))
+
+
+# ---- Step 4: RBAC-guarded admin surface -----------------------------------
+
+
+class AdminPingResponse(BaseModel):
+    """Trivial payload for the admin-role probe endpoint."""
+
+    person_id: uuid.UUID
+    roles: list[str]
+
+
+@router.get("/admin/ping", response_model=AdminPingResponse, tags=["admin"])
+async def admin_ping(
+    principal: Annotated[
+        AuthenticatedPrincipal,
+        Depends(require_role(*roles.TENANT_ADMIN_ROLES)),
+    ],
+) -> AdminPingResponse:
+    """Return the caller's identity — accessible only to tenant-admin roles.
+
+    Exists so Step 4 can prove the RBAC matrix end-to-end (each role x this
+    endpoint) with real HTTP calls. Real admin endpoints (member management,
+    role assignment, invitations) land with Step 5's memberships work.
+    """
+    return AdminPingResponse(person_id=principal.person_id, roles=list(principal.roles))
 
 
 @router.post("/logout-all", response_model=LogoutResponse)
