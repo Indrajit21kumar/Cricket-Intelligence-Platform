@@ -19,6 +19,12 @@ from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, Field
 
 from billing_service.deps import Deps, get_deps
+from billing_service.domain.dunning import (
+    NOTIFICATION_TOPIC,
+    DunningState,
+    process_failed_charge,
+    process_successful_charge,
+)
 from billing_service.domain.entitlement_check import Resolved, check_entitlement, invalidate_keys
 from billing_service.domain.invoices import list_invoices_for_tenant, record_invoice
 from billing_service.domain.payments import SIGNATURE_HEADER, verify_webhook_signature
@@ -407,6 +413,7 @@ async def payment_webhook(
         raise BadRequest(f"Unsupported event_type '{payload.event_type}'")
     invoice_status = _EVENT_TO_INVOICE_STATUS[payload.event_type]
 
+    dunning_state: DunningState | None = None
     async with tenant_session(deps.session_factory, tenant_id=payload.tenant_id) as session:
         # A well-behaved provider will only send events for known subs, but
         # we still verify — a leaked webhook secret plus a fake subscription
@@ -426,6 +433,19 @@ async def payment_webhook(
             issued_at=payload.occurred_at,
         )
 
+        # Advance the dunning state machine, but only on a NEW invoice —
+        # a replayed webhook must not push a subscription through the state
+        # machine twice (that would suspend prematurely on the 4th replay).
+        if inserted:
+            if invoice_status == "failed":
+                dunning_state = await process_failed_charge(
+                    session, subscription_id=payload.subscription_id
+                )
+            elif invoice_status == "paid":
+                dunning_state = await process_successful_charge(
+                    session, subscription_id=payload.subscription_id
+                )
+
     # Publish invoice.paid only on new + successful writes. Replays and
     # failures don't emit — the event stream stays a truthful ledger for M20.
     if inserted and invoice_status == "paid":
@@ -443,6 +463,37 @@ async def payment_webhook(
             },
         )
         await deps.event_bus.publish("billing.invoice.paid", envelope)
+
+    # Dunning state change -> notify M19 + drop the entitlement cache so a
+    # newly-suspended subscription can't sneak through the fast path.
+    if dunning_state is not None:
+        notify = EventEnvelope(
+            correlation_id=payload.event_id,
+            tenant_id=payload.tenant_id,
+            schema_version="1.0.0",
+            idempotency_key=(
+                f"{dunning_state.template}:{payload.subscription_id}:{payload.provider_ref}"
+            ),
+            payload={
+                "subscription_id": str(payload.subscription_id),
+                "invoice_id": str(row["id"]),
+                "template": dunning_state.template,
+                "attempt_number": dunning_state.attempt_number,
+                "next_retry_at": (
+                    dunning_state.next_retry_at.isoformat()
+                    if dunning_state.next_retry_at is not None
+                    else None
+                ),
+                "action": dunning_state.action,
+            },
+        )
+        await deps.event_bus.publish(NOTIFICATION_TOPIC, notify)
+
+        # Any status transition (past_due / suspended / recovered) means the
+        # cached entitlement snapshot is stale. LKG survives so entitlement
+        # checks still degrade gracefully if the DB is unreachable.
+        for k in invalidate_keys(payload.tenant_id):
+            await deps.redis.delete(k)
 
     return WebhookAck(recorded=inserted, invoice_id=row["id"], status=row["status"])
 
