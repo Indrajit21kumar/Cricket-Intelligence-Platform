@@ -5,8 +5,7 @@
 - Step 4: POST /v1/usage (internal, idempotent metering)
 - Step 5: POST/PATCH/GET /v1/subscriptions (lifecycle + proration)
 - Step 6: POST /v1/webhooks/payments (signed) + GET /v1/invoices
-
-Later step adds seats (8).
+- Step 8: POST/DELETE /v1/seats + M20 event emission + billing_audit
 """
 
 from __future__ import annotations
@@ -19,6 +18,7 @@ from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, Field
 
 from billing_service.deps import Deps, get_deps
+from billing_service.domain.billing_audit import write_audit
 from billing_service.domain.dunning import (
     NOTIFICATION_TOPIC,
     DunningState,
@@ -26,6 +26,7 @@ from billing_service.domain.dunning import (
     process_successful_charge,
 )
 from billing_service.domain.entitlement_check import Resolved, check_entitlement, invalidate_keys
+from billing_service.domain.entitlements import SEATS_MAX, quota_value
 from billing_service.domain.invoices import list_invoices_for_tenant, record_invoice
 from billing_service.domain.payments import SIGNATURE_HEADER, verify_webhook_signature
 from billing_service.domain.plans import (
@@ -35,6 +36,7 @@ from billing_service.domain.plans import (
     resolve_entitlements,
 )
 from billing_service.domain.proration import compute_proration
+from billing_service.domain.seats import allocate_seat, deallocate_seat
 from billing_service.domain.subscriptions import (
     cancel_subscription,
     change_plan,
@@ -47,8 +49,26 @@ from billing_service.domain.usage import record_usage
 from billing_service.domain.usage_counter import current_period
 from cip_core import BadRequest, Conflict, NotFound, require_idempotency_key, require_role, roles
 from cip_core.auth import AuthenticatedPrincipal
+from cip_core.context import get_correlation_id, new_correlation_id
 from cip_data import admin_session, tenant_session
 from cip_events import EventEnvelope
+
+
+def _current_correlation_id() -> str:
+    """Correlation id for the current request; generate one if the middleware
+    (defensively) didn't set it. EventEnvelope requires a non-empty string."""
+    return get_correlation_id() or new_correlation_id()
+
+
+# --- Event topics consumed by M20 (Admin & Analytics, FR-M03-09) -------------
+TOPIC_SUBSCRIPTION_CHANGED = "billing.subscription.changed"
+TOPIC_USAGE_RECORDED = "billing.usage.recorded"
+TOPIC_INVOICE_PAID = "billing.invoice.paid"
+
+# The service identity that appears in billing_audit.actor when we don't
+# have a JWT principal on the call (webhook path — the provider signs it).
+_SYSTEM_ACTOR = "billing-service"
+
 
 plans_router = APIRouter(prefix="/v1/plans", tags=["plans"])
 entitlements_router = APIRouter(prefix="/v1/entitlements", tags=["entitlements"])
@@ -56,6 +76,7 @@ usage_router = APIRouter(prefix="/v1/usage", tags=["usage"])
 subscriptions_router = APIRouter(prefix="/v1/subscriptions", tags=["subscriptions"])
 webhooks_router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
 invoices_router = APIRouter(prefix="/v1/invoices", tags=["invoices"])
+seats_router = APIRouter(prefix="/v1/seats", tags=["seats"])
 
 
 class PlanView(BaseModel):
@@ -151,6 +172,25 @@ async def record_usage_endpoint(
             idempotency_key=idempotency_key,
             period=period,
         )
+        sub_id = sub["id"]
+
+    # Emit only on new writes so M20's revenue stream stays truthful under
+    # replay. The idempotency-key is the natural dedup anchor downstream too.
+    if result.recorded:
+        envelope = EventEnvelope(
+            correlation_id=idempotency_key,
+            tenant_id=tenant_id,
+            schema_version="1.0.0",
+            idempotency_key=f"usage.recorded:{idempotency_key}",
+            payload={
+                "subscription_id": str(sub_id),
+                "meter_key": body.meter_key,
+                "qty": body.qty,
+                "period": period,
+                "total": result.total,
+            },
+        )
+        await deps.event_bus.publish(TOPIC_USAGE_RECORDED, envelope)
 
     return UsageResponse(recorded=result.recorded, total=result.total, period=period)
 
@@ -208,6 +248,35 @@ def _to_view(sub: dict[str, Any], plan_code: str) -> SubscriptionView:
     )
 
 
+async def _publish_subscription_changed(
+    deps: Deps,
+    *,
+    sub: dict[str, Any],
+    plan_code: str,
+    action: str,
+    correlation_id: str,
+) -> None:
+    """Announce a subscribe/upgrade/downgrade/cancel to the M20 stream.
+
+    ``correlation_id`` is what makes this event joinable with the audit row
+    written in the same request (M20 pipelines rely on that pairing).
+    """
+    envelope = EventEnvelope(
+        correlation_id=correlation_id,
+        tenant_id=sub["tenant_id"],
+        schema_version="1.0.0",
+        idempotency_key=f"subscription.changed:{sub['id']}:{action}:{correlation_id}",
+        payload={
+            "subscription_id": str(sub["id"]),
+            "plan_id": str(sub["plan_id"]),
+            "plan_code": plan_code,
+            "status": sub["status"],
+            "action": action,
+        },
+    )
+    await deps.event_bus.publish(TOPIC_SUBSCRIPTION_CHANGED, envelope)
+
+
 @subscriptions_router.post("", response_model=SubscriptionView, status_code=201)
 async def subscribe(
     body: SubscribeRequest,
@@ -215,7 +284,6 @@ async def subscribe(
     deps: Annotated[Deps, Depends(get_deps)],
 ) -> SubscriptionView:
     """Create a subscription for a tenant (AC-M03-01: subscribe)."""
-    _ = principal  # RBAC gate; audit lands with Step 8's audit helper.
     tenant_id = tenant_from_subject(body.subject)
 
     async with admin_session(deps.session_factory) as session:
@@ -234,10 +302,26 @@ async def subscribe(
             plan_id=plan["id"],
             trialing=body.trialing,
         )
+        await write_audit(
+            session,
+            tenant_id=tenant_id,
+            actor=str(principal.person_id),
+            action="subscription.created",
+            entity=f"subscription:{sub['id']}",
+            meta={"plan_code": plan["code"], "trialing": body.trialing},
+        )
 
     # New subscription -> future entitlement checks must re-resolve.
     for k in invalidate_keys(tenant_id):
         await deps.redis.delete(k)
+
+    await _publish_subscription_changed(
+        deps,
+        sub=sub,
+        plan_code=plan["code"],
+        action="created",
+        correlation_id=_current_correlation_id(),
+    )
 
     return _to_view(sub, plan["code"])
 
@@ -282,8 +366,6 @@ async def change_subscription(
     deps: Annotated[Deps, Depends(get_deps)],
 ) -> SubscriptionChangeResponse:
     """Upgrade/downgrade (prorated) or cancel a subscription (AC-M03-01)."""
-    _ = principal
-
     if bool(body.plan_code) == bool(body.action):
         raise BadRequest(
             "Provide exactly one of 'plan_code' (upgrade/downgrade) or 'action=cancel'"
@@ -316,6 +398,9 @@ async def change_subscription(
         if body.action == "cancel":
             updated = await cancel_subscription(session, subscription_id=subscription_id)
             resolved_plan = old_plan
+            audit_meta = {"from_plan": old_plan["code"]}
+            audit_action = "subscription.canceled"
+            event_action = "canceled"
         else:
             assert new_plan is not None
             if new_plan["id"] == old_plan["id"]:
@@ -337,11 +422,37 @@ async def change_subscription(
                 session, subscription_id=subscription_id, new_plan_id=new_plan["id"]
             )
             resolved_plan = new_plan
+            event_action = (
+                "upgraded" if new_plan["price_minor"] > old_plan["price_minor"] else "downgraded"
+            )
+            audit_action = f"subscription.{event_action}"
+            audit_meta = {
+                "from_plan": old_plan["code"],
+                "to_plan": new_plan["code"],
+                "proration_net_minor": p.net_minor,
+            }
+
+        await write_audit(
+            session,
+            tenant_id=tenant_id,
+            actor=str(principal.person_id),
+            action=audit_action,
+            entity=f"subscription:{subscription_id}",
+            meta=audit_meta,
+        )
 
     # Plan / status change -> drop the fresh entitlement cache so the next
     # check re-resolves. (LKG survives so an outage stays gracefully served.)
     for k in invalidate_keys(tenant_id):
         await deps.redis.delete(k)
+
+    await _publish_subscription_changed(
+        deps,
+        sub=updated,
+        plan_code=resolved_plan["code"],
+        action=event_action,
+        correlation_id=_current_correlation_id(),
+    )
 
     return SubscriptionChangeResponse(
         subscription=_to_view(updated, resolved_plan["code"]),
@@ -445,6 +556,20 @@ async def payment_webhook(
                 dunning_state = await process_successful_charge(
                     session, subscription_id=payload.subscription_id
                 )
+            await write_audit(
+                session,
+                tenant_id=payload.tenant_id,
+                actor=_SYSTEM_ACTOR,
+                action=f"invoice.{invoice_status}",
+                entity=f"invoice:{row['id']}",
+                meta={
+                    "provider_ref": payload.provider_ref,
+                    "amount_minor": payload.amount_minor,
+                    "currency": payload.currency,
+                    "event_id": payload.event_id,
+                    "dunning_action": (dunning_state.action if dunning_state is not None else None),
+                },
+            )
 
     # Publish invoice.paid only on new + successful writes. Replays and
     # failures don't emit — the event stream stays a truthful ledger for M20.
@@ -534,3 +659,106 @@ async def list_invoices(
         )
         for r in rows
     ]
+
+
+# --- Seats (M03 Step 8, AC-M03-06, FR-M03-08) --------------------------------
+
+
+class SeatView(BaseModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    subscription_id: uuid.UUID
+    member_ref: str
+    status: str
+
+
+class AllocateSeatRequest(BaseModel):
+    subject: str = Field(..., description="'tenant:<uuid>' — the billing subject")
+    member_ref: str = Field(
+        ...,
+        min_length=1,
+        description="Opaque M02 member id (person_id) getting the seat",
+    )
+
+
+@seats_router.post("", response_model=SeatView, status_code=201)
+async def allocate_seat_endpoint(
+    body: AllocateSeatRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*_TENANT_ADMIN_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> SeatView:
+    """Allocate a seat to a member; 409 if the plan's ``seats.max`` is full."""
+    tenant_id = tenant_from_subject(body.subject)
+
+    async with tenant_session(deps.session_factory, tenant_id=tenant_id) as session:
+        sub = await get_active_subscription(session, tenant_id)
+        if sub is None:
+            raise NotFound("No active subscription for that subject")
+
+    # Read seats.max from the plan (global, no RLS -> admin_session).
+    async with admin_session(deps.session_factory) as session:
+        entitlements = await resolve_entitlements(session, sub["plan_id"])
+    max_seats = quota_value(entitlements, SEATS_MAX, default=0)
+
+    async with tenant_session(deps.session_factory, tenant_id=tenant_id) as session:
+        seat = await allocate_seat(
+            session,
+            tenant_id=tenant_id,
+            subscription_id=sub["id"],
+            member_ref=body.member_ref,
+            max_seats=max_seats,
+        )
+        await write_audit(
+            session,
+            tenant_id=tenant_id,
+            actor=str(principal.person_id),
+            action="seat.allocated",
+            entity=f"seat:{seat['id']}",
+            meta={
+                "subscription_id": str(sub["id"]),
+                "member_ref": body.member_ref,
+                "max_seats": max_seats,
+            },
+        )
+
+    return SeatView(
+        id=seat["id"],
+        tenant_id=seat["tenant_id"],
+        subscription_id=seat["subscription_id"],
+        member_ref=str(seat["member_ref"]),
+        status=str(seat["status"]),
+    )
+
+
+class DeallocateSeatRequest(BaseModel):
+    subject: str = Field(..., description="'tenant:<uuid>' — the billing subject")
+
+
+@seats_router.delete("/{seat_id}", response_model=SeatView)
+async def deallocate_seat_endpoint(
+    seat_id: uuid.UUID,
+    body: DeallocateSeatRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*_TENANT_ADMIN_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> SeatView:
+    """Revoke a seat (soft delete — status='revoked'; row stays for audit)."""
+    tenant_id = tenant_from_subject(body.subject)
+
+    async with tenant_session(deps.session_factory, tenant_id=tenant_id) as session:
+        seat = await deallocate_seat(session, seat_id=seat_id)
+        await write_audit(
+            session,
+            tenant_id=tenant_id,
+            actor=str(principal.person_id),
+            action="seat.revoked",
+            entity=f"seat:{seat['id']}",
+            meta={"subscription_id": str(seat["subscription_id"])},
+        )
+
+    return SeatView(
+        id=seat["id"],
+        tenant_id=seat["tenant_id"],
+        subscription_id=seat["subscription_id"],
+        member_ref=str(seat["member_ref"]),
+        status=str(seat["status"]),
+    )

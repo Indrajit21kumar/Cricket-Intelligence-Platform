@@ -22,6 +22,7 @@ from billing_service.routes import (
     entitlements_router,
     invoices_router,
     plans_router,
+    seats_router,
     subscriptions_router,
     usage_router,
     webhooks_router,
@@ -66,6 +67,7 @@ def create_app() -> FastAPI:
     app.include_router(subscriptions_router)
     app.include_router(webhooks_router)
     app.include_router(invoices_router)
+    app.include_router(seats_router)
 
     return app
 
