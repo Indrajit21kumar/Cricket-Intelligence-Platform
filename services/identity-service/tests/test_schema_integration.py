@@ -21,7 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from cip_data.engine import admin_session, build_engine, build_session_factory
-from cip_data.migrations import downgrade_base, upgrade_head
+from cip_data.migrations import upgrade_head
 
 pytestmark = pytest.mark.integration
 
@@ -38,22 +38,16 @@ def _database_url() -> str:
 
 @pytest.fixture(scope="module")
 def migrated_identity_schema() -> str:
-    """Apply base + identity migrations once for the module.
+    """Ensure base + identity migrations are applied (idempotent).
 
-    Rolls back at the end so other test modules (M01 RLS suite) can share
-    the same Postgres and see the same clean starting state.
+    Does NOT downgrade base — other services (e.g. billing) may hold FKs to
+    the base tables, so tearing base down here would fail. upgrade_head is a
+    no-op if the schema is already at head, so this is order-independent.
     """
     url = _database_url()
-    # Reset to clean base.
-    downgrade_base(url, migrations_dir=IDENTITY_MIGRATIONS)
-    downgrade_base(url, migrations_dir=BASE_MIGRATIONS)
-    # Apply base first (M01), then identity (M02) on top.
     upgrade_head(url, migrations_dir=BASE_MIGRATIONS)
     upgrade_head(url, migrations_dir=IDENTITY_MIGRATIONS)
-    yield url
-    downgrade_base(url, migrations_dir=IDENTITY_MIGRATIONS)
-    # Leave base migration applied — other integration tests expect it.
-    # (downgrade_base of BASE is a per-session concern, not per-module.)
+    return url
 
 
 @pytest_asyncio.fixture

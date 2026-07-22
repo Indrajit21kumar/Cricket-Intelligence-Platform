@@ -30,14 +30,16 @@ def _database_url() -> str:
 
 @pytest.fixture(scope="module")
 def migrated_billing_schema() -> str:
+    """Ensure base + billing migrations are applied (idempotent).
+
+    Does NOT downgrade base — other services (e.g. identity) hold FKs to the
+    base tables. Billing-only rollback is exercised in
+    :class:`TestBillingMigrationRollback`.
+    """
     url = _database_url()
-    # Clean slate, then base (M01) + billing (M03) on top.
-    downgrade_base(url, migrations_dir=BILLING_MIGRATIONS)
-    downgrade_base(url, migrations_dir=BASE_MIGRATIONS)
     upgrade_head(url, migrations_dir=BASE_MIGRATIONS)
     upgrade_head(url, migrations_dir=BILLING_MIGRATIONS)
-    yield url
-    downgrade_base(url, migrations_dir=BILLING_MIGRATIONS)
+    return url
 
 
 @pytest_asyncio.fixture
@@ -50,6 +52,18 @@ async def engine(migrated_billing_schema: str) -> AsyncIterator[AsyncEngine]:
 @pytest.fixture
 def session_factory(engine: AsyncEngine) -> async_sessionmaker:
     return build_session_factory(engine)
+
+
+class TestBillingMigrationRollback:
+    """Billing migration rolls back + re-applies cleanly (Step 1 Done-when).
+
+    Billing-only: drops billing tables, re-applies them. Never touches base,
+    so it doesn't disturb other services sharing the DB.
+    """
+
+    def test_downgrade_then_upgrade_is_clean(self, migrated_billing_schema: str) -> None:
+        downgrade_base(migrated_billing_schema, migrations_dir=BILLING_MIGRATIONS)
+        upgrade_head(migrated_billing_schema, migrations_dir=BILLING_MIGRATIONS)
 
 
 class TestTables:
