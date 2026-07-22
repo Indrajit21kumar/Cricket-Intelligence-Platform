@@ -4,8 +4,9 @@
 - Step 3: POST /v1/entitlements/check (internal, cached)
 - Step 4: POST /v1/usage (internal, idempotent metering)
 - Step 5: POST/PATCH/GET /v1/subscriptions (lifecycle + proration)
+- Step 6: POST /v1/webhooks/payments (signed) + GET /v1/invoices
 
-Later steps add webhooks/invoices (6) and seats (8).
+Later step adds seats (8).
 """
 
 from __future__ import annotations
@@ -14,11 +15,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Header, Request
 from pydantic import BaseModel, Field
 
 from billing_service.deps import Deps, get_deps
 from billing_service.domain.entitlement_check import Resolved, check_entitlement, invalidate_keys
+from billing_service.domain.invoices import list_invoices_for_tenant, record_invoice
+from billing_service.domain.payments import SIGNATURE_HEADER, verify_webhook_signature
 from billing_service.domain.plans import (
     get_plan,
     get_plan_by_code,
@@ -39,11 +42,14 @@ from billing_service.domain.usage_counter import current_period
 from cip_core import BadRequest, Conflict, NotFound, require_idempotency_key, require_role, roles
 from cip_core.auth import AuthenticatedPrincipal
 from cip_data import admin_session, tenant_session
+from cip_events import EventEnvelope
 
 plans_router = APIRouter(prefix="/v1/plans", tags=["plans"])
 entitlements_router = APIRouter(prefix="/v1/entitlements", tags=["entitlements"])
 usage_router = APIRouter(prefix="/v1/usage", tags=["usage"])
 subscriptions_router = APIRouter(prefix="/v1/subscriptions", tags=["subscriptions"])
+webhooks_router = APIRouter(prefix="/v1/webhooks", tags=["webhooks"])
+invoices_router = APIRouter(prefix="/v1/invoices", tags=["invoices"])
 
 
 class PlanView(BaseModel):
@@ -335,3 +341,145 @@ async def change_subscription(
         subscription=_to_view(updated, resolved_plan["code"]),
         proration=proration,
     )
+
+
+# --- Webhooks + invoices (M03 Step 6, AC-M03-04, FR-M03-05, NFR-M03-04) -----
+#
+# CIP does not move money — the provider does. This route:
+#   1. verifies the provider's HMAC signature on the raw body (§11)
+#   2. looks up which of *our* subscriptions this event refers to
+#   3. writes an immutable invoice row keyed on ``provider_ref``
+#   4. publishes an ``invoice.paid`` event for M20 on a paid charge (FR-M03-09)
+#
+# The invoice write is idempotent on ``provider_ref`` — a redelivered webhook
+# is silently a no-op, which is the replay-safety half of AC-M03-04.
+
+
+class WebhookPayload(BaseModel):
+    """The event shape our fake provider emits; a real Stripe/Razorpay
+    adapter would translate their payload to this shape before recording.
+    """
+
+    event_id: str = Field(..., min_length=1)
+    event_type: str = Field(..., description="charge.succeeded | charge.failed")
+    provider_ref: str = Field(..., min_length=1, description="Provider charge id")
+    subscription_id: uuid.UUID
+    tenant_id: uuid.UUID
+    amount_minor: int = Field(..., ge=0)
+    currency: str = Field("INR", min_length=3, max_length=3)
+    occurred_at: datetime
+
+
+class WebhookAck(BaseModel):
+    recorded: bool = Field(..., description="False if this event was a replay")
+    invoice_id: uuid.UUID
+    status: str
+
+
+_EVENT_TO_INVOICE_STATUS = {
+    "charge.succeeded": "paid",
+    "charge.failed": "failed",
+}
+
+
+@webhooks_router.post("/payments", response_model=WebhookAck)
+async def payment_webhook(
+    request: Request,
+    deps: Annotated[Deps, Depends(get_deps)],
+    x_signature: Annotated[str | None, Header(alias=SIGNATURE_HEADER)] = None,
+) -> WebhookAck:
+    """Receive a signed payment-provider webhook. Records the invoice.
+
+    Auth is the signature — no bearer token. That mirrors how every real
+    provider posts: they don't have a CIP JWT, they have a shared secret.
+    """
+    body = await request.body()
+
+    # Reject BEFORE parsing so replay/tamper isn't given a free schema
+    # validation error message that would leak info about the payload.
+    verify_webhook_signature(
+        secret=deps.settings.payment_webhook_secret, body=body, header_value=x_signature
+    )
+
+    payload = WebhookPayload.model_validate_json(body)
+
+    if payload.event_type not in _EVENT_TO_INVOICE_STATUS:
+        raise BadRequest(f"Unsupported event_type '{payload.event_type}'")
+    invoice_status = _EVENT_TO_INVOICE_STATUS[payload.event_type]
+
+    async with tenant_session(deps.session_factory, tenant_id=payload.tenant_id) as session:
+        # A well-behaved provider will only send events for known subs, but
+        # we still verify — a leaked webhook secret plus a fake subscription
+        # id should not create phantom invoices.
+        sub = await get_subscription(session, payload.subscription_id)
+        if sub is None:
+            raise NotFound("Subscription not found for webhook event")
+
+        row, inserted = await record_invoice(
+            session,
+            tenant_id=payload.tenant_id,
+            subscription_id=payload.subscription_id,
+            amount_minor=payload.amount_minor,
+            currency=payload.currency,
+            status=invoice_status,
+            provider_ref=payload.provider_ref,
+            issued_at=payload.occurred_at,
+        )
+
+    # Publish invoice.paid only on new + successful writes. Replays and
+    # failures don't emit — the event stream stays a truthful ledger for M20.
+    if inserted and invoice_status == "paid":
+        envelope = EventEnvelope(
+            correlation_id=payload.event_id,
+            tenant_id=payload.tenant_id,
+            schema_version="1.0.0",
+            idempotency_key=f"invoice.paid:{payload.provider_ref}",
+            payload={
+                "invoice_id": str(row["id"]),
+                "subscription_id": str(payload.subscription_id),
+                "amount_minor": payload.amount_minor,
+                "currency": payload.currency,
+                "issued_at": payload.occurred_at.astimezone(UTC).isoformat(),
+            },
+        )
+        await deps.event_bus.publish("billing.invoice.paid", envelope)
+
+    return WebhookAck(recorded=inserted, invoice_id=row["id"], status=row["status"])
+
+
+# --- Invoices ---------------------------------------------------------------
+
+
+class InvoiceView(BaseModel):
+    id: uuid.UUID
+    subscription_id: uuid.UUID
+    amount_minor: int
+    currency: str
+    status: str
+    provider_ref: str
+    issued_at: datetime
+
+
+@invoices_router.get("", response_model=list[InvoiceView])
+async def list_invoices(
+    subject: str,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*_TENANT_ADMIN_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> list[InvoiceView]:
+    """List invoices for the subject's tenant (RLS-scoped)."""
+    _ = principal
+    tenant_id = tenant_from_subject(subject)
+    async with tenant_session(deps.session_factory, tenant_id=tenant_id) as session:
+        rows = await list_invoices_for_tenant(session, tenant_id)
+    return [
+        InvoiceView(
+            id=r["id"],
+            subscription_id=r["subscription_id"],
+            amount_minor=r["amount_minor"],
+            currency=r["currency"],
+            status=r["status"],
+            provider_ref=r["provider_ref"],
+            issued_at=r["issued_at"],
+        )
+        for r in rows
+    ]

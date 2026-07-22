@@ -20,9 +20,11 @@ from billing_service.health import router as health_router
 from billing_service.health import version_router
 from billing_service.routes import (
     entitlements_router,
+    invoices_router,
     plans_router,
     subscriptions_router,
     usage_router,
+    webhooks_router,
 )
 from billing_service.settings import get_service_settings
 from cip_data import admin_session
@@ -62,6 +64,8 @@ def create_app() -> FastAPI:
     app.include_router(entitlements_router)
     app.include_router(usage_router)
     app.include_router(subscriptions_router)
+    app.include_router(webhooks_router)
+    app.include_router(invoices_router)
 
     return app
 

@@ -14,6 +14,7 @@ import redis.asyncio as aioredis
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from billing_service.domain.payments import FakePaymentProvider, PaymentProvider
 from billing_service.settings import ServiceSettings
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
@@ -30,6 +31,9 @@ class Deps:
     idempotency_store: RedisIdempotencyStore
     #: Redis client backing the entitlement cache (Step 3).
     redis: aioredis.Redis
+    #: Payment provider adapter. Fake by default (Step 6); swap to Stripe /
+    #: Razorpay by binding a different implementation of PaymentProvider.
+    payment_provider: PaymentProvider
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -40,6 +44,7 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     await event_bus.start()
     idempotency_store = RedisIdempotencyStore(settings.redis_url)
     redis = aioredis.from_url(settings.redis_url, decode_responses=True)
+    payment_provider: PaymentProvider = FakePaymentProvider()
     return Deps(
         settings=settings,
         engine=engine,
@@ -47,6 +52,7 @@ async def build_deps(settings: ServiceSettings) -> Deps:
         event_bus=event_bus,
         idempotency_store=idempotency_store,
         redis=redis,
+        payment_provider=payment_provider,
     )
 
 
