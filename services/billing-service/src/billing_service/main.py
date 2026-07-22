@@ -18,7 +18,7 @@ from billing_service.deps import build_deps, shutdown_deps
 from billing_service.domain.catalogue import seed_catalogue
 from billing_service.health import router as health_router
 from billing_service.health import version_router
-from billing_service.routes import plans_router
+from billing_service.routes import entitlements_router, plans_router
 from billing_service.settings import get_service_settings
 from cip_data import admin_session
 
@@ -54,6 +54,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(version_router)
     app.include_router(plans_router)
+    app.include_router(entitlements_router)
 
     return app
 
