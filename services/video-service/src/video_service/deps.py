@@ -17,6 +17,7 @@ from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
 from video_service.domain.entitlement import EntitlementClient, FakeEntitlementClient
 from video_service.domain.processor import FakeVideoProcessor, VideoProcessor
+from video_service.domain.profile_client import FakeProfileClient, ProfileClient
 from video_service.domain.storage import FakeStorageProvider, StorageProvider
 from video_service.settings import ServiceSettings
 
@@ -36,6 +37,8 @@ class Deps:
     entitlement_client: EntitlementClient
     #: Preprocessing adapter (fake by default; real ffmpeg/OpenCV later).
     video_processor: VideoProcessor
+    #: M04 profile client for the height calibration fallback (fake by default).
+    profile_client: ProfileClient
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -48,6 +51,7 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     storage: StorageProvider = FakeStorageProvider()
     entitlement_client: EntitlementClient = FakeEntitlementClient()
     video_processor: VideoProcessor = FakeVideoProcessor()
+    profile_client: ProfileClient = FakeProfileClient()
     return Deps(
         settings=settings,
         engine=engine,
@@ -57,6 +61,7 @@ async def build_deps(settings: ServiceSettings) -> Deps:
         storage=storage,
         entitlement_client=entitlement_client,
         video_processor=video_processor,
+        profile_client=profile_client,
     )
 
 

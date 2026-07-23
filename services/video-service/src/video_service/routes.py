@@ -184,6 +184,10 @@ class CompleteResponse(BaseModel):
     camera_angle: str
     angle_supported: bool
     angle_recommendation: str | None = None
+    pixel_to_meter: float | None = None
+    spatial_confidence: str
+    depth_estimated: bool
+    calibration_method: str
 
 
 @videos_router.post("/{ingestion_id}/complete", response_model=CompleteResponse)
@@ -214,6 +218,7 @@ async def complete_upload(
             tenant_id=tenant_id,
             ingestion=ingestion,
             processor=deps.video_processor,
+            profile_client=deps.profile_client,
         )
 
     return CompleteResponse(
@@ -225,6 +230,10 @@ async def complete_upload(
         camera_angle=outcome.camera_angle,
         angle_supported=outcome.angle_supported,
         angle_recommendation=outcome.angle_recommendation,
+        pixel_to_meter=outcome.pixel_to_meter,
+        spatial_confidence=outcome.spatial_confidence,
+        depth_estimated=outcome.depth_estimated,
+        calibration_method=outcome.calibration_method,
     )
 
 

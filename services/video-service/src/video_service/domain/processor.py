@@ -39,6 +39,7 @@ class ClipMeasurements:
     batter_in_frame: float
     stump_visible: bool
     stump_pixel_height: float | None
+    player_pixel_height: float | None  # batter's pixel height (height-fallback calib)
     angle_hint: str  # side_on | front_on | square | other (raw classifier hint)
     angle_confidence: float  # 0..1
 
@@ -62,6 +63,7 @@ def _good_clip() -> ClipMeasurements:
         batter_in_frame=0.95,
         stump_visible=True,
         stump_pixel_height=220.0,
+        player_pixel_height=430.0,
         angle_hint="side_on",
         angle_confidence=0.9,
     )
