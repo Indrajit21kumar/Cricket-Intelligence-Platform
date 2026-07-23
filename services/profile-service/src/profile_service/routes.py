@@ -32,8 +32,10 @@ from cip_core import (
     Conflict,
     Forbidden,
     NotFound,
+    audit_record,
     check_profile_access,
     has_active_consent,
+    has_verified_guardianship,
     require_authenticated,
     require_role,
     roles,
@@ -54,6 +56,7 @@ from profile_service.domain.dna import (
     reconstruct_dna_at,
     write_traits,
 )
+from profile_service.domain.export_delete import delete_profile, export_profile
 from profile_service.domain.profiles import (
     create_profile,
     get_attributes,
@@ -531,3 +534,92 @@ async def read_personal_baseline(
     if baseline is None:
         raise NotFound("Baseline not found for that metric")
     return BaselineView(**baseline)
+
+
+# --- Export + deletion + portability (M04 Step 6, AC-M04-01/06, FR-M04-09) ---
+
+
+class ExportBundle(BaseModel):
+    person_id: str
+    profile: dict[str, Any]
+    dna_current: list[dict[str, Any]]
+    dna_history: list[dict[str, Any]]
+    snapshots: list[dict[str, Any]]
+    baselines: list[dict[str, Any]]
+    history_index: list[dict[str, Any]]
+
+
+class DeleteResult(BaseModel):
+    deleted: bool
+
+
+async def _require_owner_access(
+    deps: Deps, *, subject: uuid.UUID, principal: AuthenticatedPrincipal
+) -> None:
+    """Data-subject rights gate: self, guardian of the subject, or platform_admin.
+
+    Deliberately NARROWER than the read gate — a coach with sharing consent may
+    read a profile but may NOT export or delete it. Export/deletion belong to
+    the person (or their guardian / platform ops).
+    """
+    if principal.person_id == subject:
+        return
+    if roles.PLATFORM_ADMIN in principal.roles:
+        return
+    async with admin_session(deps.session_factory) as session:
+        if await has_verified_guardianship(
+            session, minor_person_id=subject, guardian_person_id=principal.person_id
+        ):
+            return
+    raise Forbidden(
+        "Only the subject, their guardian, or platform admin may do this",
+        details={"reason": "not_owner"},
+    )
+
+
+@profiles_router.get("/{person_id}/export", response_model=ExportBundle)
+async def export_player_profile(
+    person_id: uuid.UUID,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> ExportBundle:
+    """Export the full profile bundle (FR-M04-09). Audited."""
+    await _require_owner_access(deps, subject=person_id, principal=principal)
+    async with admin_session(deps.session_factory) as session:
+        bundle = await export_profile(session, person_id)
+        if bundle is None:
+            raise NotFound("Profile not found")
+        # Person-scoped action -> platform-level audit row (tenant_id NULL).
+        await audit_record(
+            session,
+            action="profile.exported",
+            entity=f"person:{person_id}",
+            actor=str(principal.person_id),
+            tenant_id=None,
+        )
+    return ExportBundle(**bundle)
+
+
+@profiles_router.delete("/{person_id}/profile", response_model=DeleteResult)
+async def delete_player_profile(
+    person_id: uuid.UUID,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> DeleteResult:
+    """Delete a player's profile + all child records (FR-M04-09). Audited.
+
+    Cascade removes DNA / history / snapshots / baselines / history index.
+    """
+    await _require_owner_access(deps, subject=person_id, principal=principal)
+    async with admin_session(deps.session_factory) as session:
+        deleted = await delete_profile(session, person_id)
+        if not deleted:
+            raise NotFound("Profile not found")
+        await audit_record(
+            session,
+            action="profile.deleted",
+            entity=f"person:{person_id}",
+            actor=str(principal.person_id),
+            tenant_id=None,
+        )
+    return DeleteResult(deleted=True)
