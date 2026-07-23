@@ -29,7 +29,7 @@ from video_service import __version__
 from video_service.deps import build_deps, shutdown_deps
 from video_service.health import router as health_router
 from video_service.health import version_router
-from video_service.routes import router as demo_router
+from video_service.routes import videos_router
 from video_service.settings import get_service_settings
 
 
@@ -51,11 +51,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="CIP video-service",
         version=__version__,
-        description=(
-            "Template service. Wires cip-core middleware, cip-observability "
-            "(logs + traces + metrics), cip-data (async SQLAlchemy + RLS), "
-            "and cip-events (Kafka-wire pub/sub + idempotent consumer)."
-        ),
+        description="Video Intelligence (M05) — ingest, preprocess, calibrate, quality-gate.",
         lifespan=lifespan,
     )
 
@@ -66,7 +62,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(version_router)
-    app.include_router(demo_router)
+    app.include_router(videos_router)
 
     return app
 

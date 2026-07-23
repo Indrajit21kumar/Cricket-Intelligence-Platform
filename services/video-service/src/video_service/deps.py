@@ -15,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
+from video_service.domain.entitlement import EntitlementClient, FakeEntitlementClient
+from video_service.domain.storage import FakeStorageProvider, StorageProvider
 from video_service.settings import ServiceSettings
 
 
@@ -27,6 +29,10 @@ class Deps:
     session_factory: async_sessionmaker[AsyncSession]
     event_bus: KafkaEventBus
     idempotency_store: RedisIdempotencyStore
+    #: Object-storage adapter (fake by default; real S3/MinIO plugs in later).
+    storage: StorageProvider
+    #: M03 entitlement + usage client (fake by default; real HTTP later).
+    entitlement_client: EntitlementClient
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -36,12 +42,16 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     event_bus = KafkaEventBus(bootstrap_servers=settings.kafka_bootstrap)
     await event_bus.start()
     idempotency_store = RedisIdempotencyStore(settings.redis_url)
+    storage: StorageProvider = FakeStorageProvider()
+    entitlement_client: EntitlementClient = FakeEntitlementClient()
     return Deps(
         settings=settings,
         engine=engine,
         session_factory=session_factory,
         event_bus=event_bus,
         idempotency_store=idempotency_store,
+        storage=storage,
+        entitlement_client=entitlement_client,
     )
 
 

@@ -1,94 +1,198 @@
-"""Demo tenant-scoped endpoint used to prove the full stack is wired.
+"""Video Intelligence API routes — M05.
 
-`POST /v1/demo/echo` takes a message, writes an audit-log row under the
-caller's tenant, publishes an event carrying the request's correlation_id,
-and returns a summary. Its purpose is to exercise every M01 primitive on
-one request path so integration tests can verify:
+- Step 2: signed-URL upload + validation + M03 entitlement gate.
 
-- ``cip-core`` middleware bound the tenant_id + correlation_id
-- ``cip-data.tenant_session`` scoped the DB write to that tenant (RLS)
-- ``cip-events`` propagated the correlation_id in the envelope
-- ``cip-observability`` correlation_id appears in logs + spans (validated
-  via structlog capture in the integration test)
+M05 is tenant-scoped: the tenant comes from the ``X-Tenant-ID`` header
+(bound by cip-core middleware); ``person_id`` (the player the clip is of) is
+in the request body. ``correlation_id`` threads the clip through the pipeline
+and is the idempotency anchor.
+
+Endpoints:
+  POST /v1/videos              create ingestion + return a signed upload URL
+  POST /v1/videos/{id}/complete  mark upload complete
+  GET  /v1/videos/{id}          ingestion status
+
+Later steps add preprocessing (3), angle (4), calibration (5), quality gate
+(6), publish + metering (7), and the capture-guidance / quality API (8).
 """
 
 from __future__ import annotations
 
 import uuid
-from typing import Annotated
+from datetime import datetime
+from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
-from sqlalchemy import text
 
-from cip_core import get_correlation_id, require_idempotency_key, require_tenant_id
+from cip_core import (
+    AuthenticatedPrincipal,
+    Forbidden,
+    NotFound,
+    Unprocessable,
+    get_correlation_id,
+    new_correlation_id,
+    require_authenticated,
+    require_tenant_id,
+)
 from cip_data import tenant_session
-from cip_events import EventEnvelope
 from video_service.deps import Deps, get_deps
+from video_service.domain.ingestions import (
+    STATUS_UPLOADED,
+    create_ingestion,
+    get_ingestion,
+    set_status,
+)
+from video_service.domain.validation import validate_upload
 
-# Tagged "demo" so contract tests (Schemathesis) can exclude these routes —
-# they exercise the full stack but their invariants (X-Tenant-ID header
-# required in middleware, custom Idempotency-Key requirement) aren't
-# expressible in OpenAPI cleanly. Real service endpoints in later modules
-# will be contract-tested normally.
-router = APIRouter(prefix="/v1/demo", tags=["demo"])
-
-DEMO_TOPIC = "cip.demo.echoed"
-
-
-class EchoRequest(BaseModel):
-    message: str = Field(..., min_length=1, max_length=200)
+videos_router = APIRouter(prefix="/v1/videos", tags=["videos"])
 
 
-class EchoResponse(BaseModel):
+class CreateVideoRequest(BaseModel):
+    person_id: uuid.UUID = Field(..., description="The player the clip is of (M02 person)")
+    source_type: str = Field(..., description="mobile | dslr | nets | match")
+    content_type: str = Field(..., description="video/mp4 | video/quicktime | video/webm")
+    size_bytes: int | None = Field(None, ge=0, description="Declared upload size")
+
+
+class CreateVideoResponse(BaseModel):
+    ingestion_id: uuid.UUID
     correlation_id: str
-    tenant_id: uuid.UUID
-    audit_id: uuid.UUID
-    published_topic: str
+    raw_ref: str
+    upload_url: str
+    expires_in: int
+    status: str
 
 
-@router.post("/echo", response_model=EchoResponse)
-async def echo(
-    body: EchoRequest,
-    idempotency_key: Annotated[str, Depends(require_idempotency_key)],
+class IngestionView(BaseModel):
+    id: uuid.UUID
+    person_id: uuid.UUID
+    correlation_id: str
+    source_type: str
+    status: str
+    content_type: str | None = None
+    size_bytes: int | None = None
+    created_at: datetime | None = None
+
+
+def _ingestion_view(row: dict[str, Any]) -> IngestionView:
+    return IngestionView(
+        id=row["id"],
+        person_id=row["person_id"],
+        correlation_id=str(row["correlation_id"]),
+        source_type=str(row["source_type"]),
+        status=str(row["status"]),
+        content_type=row.get("content_type"),
+        size_bytes=row.get("size_bytes"),
+        created_at=row.get("created_at"),
+    )
+
+
+def _correlation() -> str:
+    return get_correlation_id() or new_correlation_id()
+
+
+@videos_router.post("", response_model=CreateVideoResponse, status_code=201)
+async def create_video(
+    body: CreateVideoRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
     deps: Annotated[Deps, Depends(get_deps)],
-) -> EchoResponse:
-    """Write an audit row under the current tenant, publish a demo event."""
-    tenant_id = require_tenant_id()
-    correlation_id = get_correlation_id() or ""
-    audit_id = uuid.uuid4()
+) -> CreateVideoResponse:
+    """Create an ingestion + return a signed upload URL.
 
-    async with tenant_session(deps.session_factory) as session:
-        await session.execute(
-            text(
-                "INSERT INTO audit_log (id, tenant_id, actor, action, entity, "
-                "correlation_id, meta) VALUES "
-                "(:id, :tid, :actor, :action, :entity, :cid, "
-                "cast(:meta as jsonb))"
-            ),
-            {
-                "id": audit_id,
-                "tid": tenant_id,
-                "actor": "demo",
-                "action": "echo",
-                "entity": "message",
-                "cid": correlation_id,
-                "meta": f'{{"message": "{body.message}"}}',
-            },
+    Order (M05 §5/§8): validate the request, then check the analysis
+    entitlement with M03 (deny over-quota), then mint the signed URL and
+    persist the ingestion. No GPU / preprocessing happens here.
+    """
+    _ = principal
+    tenant_id = require_tenant_id()
+
+    # 1. Server-side validation (FR-M05-01).
+    reasons = validate_upload(
+        content_type=body.content_type,
+        source_type=body.source_type,
+        size_bytes=body.size_bytes,
+    )
+    if reasons:
+        raise Unprocessable("Upload failed validation", details={"reasons": reasons})
+
+    # 2. Entitlement gate — M05 is the first billable stage (FR-M05-02, AC-M05-04).
+    decision = await deps.entitlement_client.check_analysis_quota(tenant_id=tenant_id)
+    if not decision.allowed:
+        raise Forbidden(
+            "Analysis quota exhausted for this subscription",
+            details={"reason": decision.reason},
         )
 
-    envelope = EventEnvelope(
-        correlation_id=correlation_id,
+    # 3. Mint the signed URL + persist the ingestion (idempotent on correlation).
+    correlation_id = _correlation()
+    ingestion_id = uuid.uuid4()
+    signed = deps.storage.create_upload_url(
         tenant_id=tenant_id,
-        schema_version="1.0.0",
-        idempotency_key=idempotency_key,
-        payload={"message": body.message, "audit_id": str(audit_id)},
+        person_id=body.person_id,
+        ingestion_id=ingestion_id,
+        content_type=body.content_type,
     )
-    await deps.event_bus.publish(DEMO_TOPIC, envelope)
+    async with tenant_session(deps.session_factory, tenant_id=tenant_id) as session:
+        row, _created = await create_ingestion(
+            session,
+            tenant_id=tenant_id,
+            person_id=body.person_id,
+            correlation_id=correlation_id,
+            source_type=body.source_type,
+            content_type=body.content_type,
+            size_bytes=body.size_bytes,
+            raw_ref=signed.raw_ref,
+        )
 
-    return EchoResponse(
-        correlation_id=correlation_id,
-        tenant_id=tenant_id,
-        audit_id=audit_id,
-        published_topic=DEMO_TOPIC,
+    return CreateVideoResponse(
+        ingestion_id=row["id"],
+        correlation_id=str(row["correlation_id"]),
+        raw_ref=str(row["raw_ref"]),
+        upload_url=signed.upload_url,
+        expires_in=signed.expires_in,
+        status=str(row["status"]),
     )
+
+
+@videos_router.post("/{ingestion_id}/complete", response_model=IngestionView)
+async def complete_upload(
+    ingestion_id: uuid.UUID,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> IngestionView:
+    """Mark the upload complete once the client has PUT the object.
+
+    Verifies the object is actually present in storage before transitioning
+    to ``uploaded`` (processing begins in Step 3).
+    """
+    _ = principal
+    tenant_id = require_tenant_id()
+    async with tenant_session(deps.session_factory, tenant_id=tenant_id) as session:
+        ingestion = await get_ingestion(session, ingestion_id)
+        if ingestion is None:
+            raise NotFound("Ingestion not found")
+        if not await deps.storage.object_exists(str(ingestion["raw_ref"])):
+            raise Unprocessable(
+                "Uploaded object not found in storage",
+                details={"reason": "object_missing"},
+            )
+        updated = await set_status(session, ingestion_id, STATUS_UPLOADED)
+    assert updated is not None
+    return _ingestion_view(updated)
+
+
+@videos_router.get("/{ingestion_id}", response_model=IngestionView)
+async def get_video(
+    ingestion_id: uuid.UUID,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> IngestionView:
+    """Ingestion status (RLS scopes it to the caller's tenant)."""
+    _ = principal
+    tenant_id = require_tenant_id()
+    async with tenant_session(deps.session_factory, tenant_id=tenant_id) as session:
+        ingestion = await get_ingestion(session, ingestion_id)
+    if ingestion is None:
+        raise NotFound("Ingestion not found")
+    return _ingestion_view(ingestion)
