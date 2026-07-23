@@ -53,6 +53,12 @@ from profile_service.domain.profiles import (
     get_profile_by_person,
     update_attributes,
 )
+from profile_service.domain.snapshots import (
+    create_snapshot,
+    get_snapshot,
+    list_snapshots,
+    trait_trend,
+)
 
 profiles_router = APIRouter(prefix="/v1/players", tags=["profiles"])
 
@@ -69,6 +75,7 @@ Stance = Literal["right-hand-bat", "left-hand-bat"]
 AgeBand = Literal["u13", "u16", "u19", "senior"]
 Hand = Literal["right", "left"]
 Provenance = Literal["measured", "estimated", "modelled"]
+Period = Literal["weekly", "monthly", "yearly"]
 
 
 class ProfileAttributes(BaseModel):
@@ -329,3 +336,94 @@ async def read_dna_history(
         else:
             rows = await get_trait_history(session, profile_id, trait_key=trait_key)
     return [TraitView(**r) for r in rows]
+
+
+# --- DNA snapshots + progress trends (M04 Step 4, AC-M04-04, FR-M04-07/08) ---
+
+
+class SnapshotSummary(BaseModel):
+    version: int
+    taken_at: datetime
+    trait_count: int | None = None
+
+
+class SnapshotDetail(BaseModel):
+    version: int
+    taken_at: datetime
+    payload: dict[str, Any]
+
+
+class TrendPoint(BaseModel):
+    period_start: datetime
+    value: str
+    confidence: float | None = None
+
+
+@profiles_router.post("/{person_id}/dna/snapshots", response_model=SnapshotSummary, status_code=201)
+async def take_dna_snapshot(
+    person_id: uuid.UUID,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(DNA_WRITER_ROLE))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> SnapshotSummary:
+    """Internal: M16 captures a versioned point-in-time snapshot of the DNA."""
+    _ = principal
+    profile_id = await _resolve_profile_id(deps, person_id)
+    async with admin_session(deps.session_factory) as session:
+        result = await create_snapshot(session, profile_id=profile_id)
+    return SnapshotSummary(
+        version=result["version"],
+        taken_at=result["taken_at"],
+        trait_count=result["trait_count"],
+    )
+
+
+@profiles_router.get("/{person_id}/dna/snapshots", response_model=list[SnapshotSummary])
+async def list_dna_snapshots(
+    person_id: uuid.UUID,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> list[SnapshotSummary]:
+    """List snapshot versions for a player (consent-scoped)."""
+    await _require_read_access(deps, subject=person_id, principal=principal, purpose="read_dna")
+    profile_id = await _resolve_profile_id(deps, person_id)
+    async with admin_session(deps.session_factory) as session:
+        rows = await list_snapshots(session, profile_id)
+    return [SnapshotSummary(version=r["version"], taken_at=r["taken_at"]) for r in rows]
+
+
+@profiles_router.get("/{person_id}/dna/snapshots/{version}", response_model=SnapshotDetail)
+async def read_dna_snapshot(
+    person_id: uuid.UUID,
+    version: int,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> SnapshotDetail:
+    """Read a specific DNA snapshot's full payload (consent-scoped)."""
+    await _require_read_access(deps, subject=person_id, principal=principal, purpose="read_dna")
+    profile_id = await _resolve_profile_id(deps, person_id)
+    async with admin_session(deps.session_factory) as session:
+        snap = await get_snapshot(session, profile_id, version)
+    if snap is None:
+        raise NotFound("Snapshot not found")
+    return SnapshotDetail(
+        version=snap["version"], taken_at=snap["taken_at"], payload=snap["payload"]
+    )
+
+
+@profiles_router.get("/{person_id}/progress", response_model=list[TrendPoint])
+async def read_progress(
+    person_id: uuid.UUID,
+    trait_key: str,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+    period: Period = "monthly",
+) -> list[TrendPoint]:
+    """Period-scoped trend of one trait (weekly/monthly/yearly), consent-scoped."""
+    await _require_read_access(deps, subject=person_id, principal=principal, purpose="read_dna")
+    profile_id = await _resolve_profile_id(deps, person_id)
+    async with admin_session(deps.session_factory) as session:
+        rows = await trait_trend(session, profile_id=profile_id, trait_key=trait_key, period=period)
+    return [
+        TrendPoint(period_start=r["period_start"], value=r["value"], confidence=r["confidence"])
+        for r in rows
+    ]
