@@ -29,7 +29,7 @@ from video_service import __version__
 from video_service.deps import build_deps, shutdown_deps
 from video_service.health import router as health_router
 from video_service.health import version_router
-from video_service.routes import videos_router
+from video_service.routes import guidance_router, videos_router
 from video_service.settings import get_service_settings
 
 
@@ -63,6 +63,7 @@ def create_app() -> FastAPI:
     app.include_router(health_router)
     app.include_router(version_router)
     app.include_router(videos_router)
+    app.include_router(guidance_router)
 
     return app
 

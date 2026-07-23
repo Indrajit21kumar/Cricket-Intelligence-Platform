@@ -45,9 +45,12 @@ from video_service.domain.ingestions import (
 )
 from video_service.domain.pipeline import run_pipeline
 from video_service.domain.processing_results import get_processing_result
+from video_service.domain.quality_flags import get_flags
+from video_service.domain.quality_gate import capture_thresholds
 from video_service.domain.validation import validate_upload
 
 videos_router = APIRouter(prefix="/v1/videos", tags=["videos"])
+guidance_router = APIRouter(prefix="/v1/capture-guidance", tags=["capture-guidance"])
 
 # The event M05 publishes to the downstream engines (M06-M09).
 TOPIC_VIDEO_NORMALIZED = "video.normalized"
@@ -330,3 +333,63 @@ async def get_video(
             method=calibration["method"],
         )
     return _ingestion_view(ingestion).model_copy(update=updates)
+
+
+# --- Quality result + capture guidance (M05 Step 8, FR-M05-10, §11) ----------
+
+
+class QualityResult(BaseModel):
+    ingestion_id: uuid.UUID
+    status: str
+    admitted: bool
+    flags: list[QualityFlagView]
+
+
+@videos_router.get("/{ingestion_id}/quality", response_model=QualityResult)
+async def get_quality(
+    ingestion_id: uuid.UUID,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> QualityResult:
+    """Detailed quality-gate result for the re-film UX (FR-M05-10).
+
+    Returns the persisted flags (fail + soft) with actionable messages, so the
+    client can prompt the user to re-film. ``admitted`` is false when any hard
+    fail is present.
+    """
+    _ = principal
+    tenant_id = require_tenant_id()
+    async with tenant_session(deps.session_factory, tenant_id=tenant_id) as session:
+        ingestion = await get_ingestion(session, ingestion_id)
+        if ingestion is None:
+            raise NotFound("Ingestion not found")
+        flags = await get_flags(session, ingestion_id)
+    flag_views = [
+        QualityFlagView(code=f["code"], severity=f["severity"], message=f["message"]) for f in flags
+    ]
+    admitted = not any(f.severity == "fail" for f in flag_views)
+    return QualityResult(
+        ingestion_id=ingestion_id,
+        status=str(ingestion["status"]),
+        admitted=admitted,
+        flags=flag_views,
+    )
+
+
+class CaptureGuidance(BaseModel):
+    """The capture-time contract the mobile overlay enforces (§11).
+
+    The thresholds are the SAME ones the post-upload quality gate uses, so
+    on-device guidance and the server gate always agree.
+    """
+
+    thresholds: dict[str, object]
+
+
+@guidance_router.get("", response_model=CaptureGuidance)
+async def get_capture_guidance(
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+) -> CaptureGuidance:
+    """The capture-guidance thresholds for the pre-capture overlay (§11)."""
+    _ = principal
+    return CaptureGuidance(thresholds=capture_thresholds())
