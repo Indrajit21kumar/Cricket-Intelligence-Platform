@@ -24,6 +24,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from cip_core import (
     CONSENT_PROCESSING,
@@ -34,13 +35,16 @@ from cip_core import (
     NotFound,
     audit_record,
     check_profile_access,
+    get_correlation_id,
     has_active_consent,
     has_verified_guardianship,
+    new_correlation_id,
     require_authenticated,
     require_role,
     roles,
 )
 from cip_data import admin_session
+from cip_events import EventEnvelope
 from profile_service.deps import Deps, get_deps
 from profile_service.domain.baseline import (
     get_baseline,
@@ -84,6 +88,57 @@ DNA_WRITER_ROLE = "service.cricket_dna"
 # The analysis pipeline (M10 / physics) presents this scope to record metric
 # observations that build the personal baseline.
 BASELINE_WRITER_ROLE = "service.metrics"
+
+# Events for M18 / Progress Analytics (FR-M04-10).
+TOPIC_PROFILE_UPDATED = "profile.updated"
+TOPIC_DNA_UPDATED = "dna.updated"
+
+# Profile events are PERSON-scoped, not tenant-scoped (the profile is portable
+# and belongs to a person, not a tenant). The EventEnvelope requires a tenant
+# UUID, so person-scoped events use the nil UUID as a sentinel and carry the
+# real subject in ``payload.person_id``; consumers key on that.
+_NIL_TENANT = uuid.UUID(int=0)
+
+
+def _correlation() -> str:
+    """Request correlation id (generate one if the middleware didn't set it)."""
+    return get_correlation_id() or new_correlation_id()
+
+
+async def _audit_mutation(
+    session: AsyncSession,
+    *,
+    action: str,
+    person_id: uuid.UUID,
+    actor: str,
+    meta: dict[str, Any] | None = None,
+) -> None:
+    """Write a platform-level (person-scoped) M01 audit row (FR-M04-11).
+
+    Runs inside the mutation's own admin_session so the audit is transactional
+    with the change. tenant_id is NULL — the action belongs to a person.
+    """
+    await audit_record(
+        session,
+        action=action,
+        entity=f"person:{person_id}",
+        actor=actor,
+        meta=meta,
+        tenant_id=None,
+    )
+
+
+async def _emit(deps: Deps, topic: str, *, person_id: uuid.UUID, payload: dict[str, Any]) -> None:
+    """Publish a person-scoped profile event (best-effort, post-commit)."""
+    envelope = EventEnvelope(
+        correlation_id=_correlation(),
+        tenant_id=_NIL_TENANT,
+        schema_version="1.0.0",
+        idempotency_key=f"{topic}:{person_id}:{uuid.uuid4()}",
+        payload={"person_id": str(person_id), **payload},
+    )
+    await deps.event_bus.publish(topic, envelope)
+
 
 Stance = Literal["right-hand-bat", "left-hand-bat"]
 AgeBand = Literal["u13", "u16", "u19", "senior"]
@@ -172,6 +227,11 @@ async def create_player_profile(
             age_band=body.age_band,
             dominant_hand=body.dominant_hand,
         )
+        await _audit_mutation(
+            session, action="profile.created", person_id=person_id, actor=str(principal.person_id)
+        )
+
+    await _emit(deps, TOPIC_PROFILE_UPDATED, person_id=person_id, payload={"change": "created"})
     return _view(row)
 
 
@@ -202,8 +262,17 @@ async def patch_player_profile(
     fields = body.model_dump(exclude_unset=True)
     async with admin_session(deps.session_factory) as session:
         row = await update_attributes(session, person_id=person_id, fields=fields)
-    if row is None:
-        raise NotFound("Profile not found")
+        if row is None:
+            raise NotFound("Profile not found")
+        await _audit_mutation(
+            session,
+            action="profile.updated",
+            person_id=person_id,
+            actor=str(principal.person_id),
+            meta={"fields": sorted(fields)},
+        )
+
+    await _emit(deps, TOPIC_PROFILE_UPDATED, person_id=person_id, payload={"change": "attributes"})
     return _view(row)
 
 
@@ -291,7 +360,6 @@ async def write_dna(
     Each update UPSERTs the current value and appends an immutable history row
     (NFR-M04-02). Provenance + confidence come from M16 (FR-M04-04).
     """
-    _ = principal  # the require_role gate is the "only M16" enforcement
     # Belt-and-braces: reject unknown provenance values (pydantic Literal
     # already constrains this, but the domain constant is the source of truth).
     for u in body.updates:
@@ -311,6 +379,20 @@ async def write_dna(
     ]
     async with admin_session(deps.session_factory) as session:
         written = await write_traits(session, profile_id=profile_id, updates=updates)
+        await _audit_mutation(
+            session,
+            action="dna.updated",
+            person_id=person_id,
+            actor=str(principal.person_id),
+            meta={"trait_keys": [u.trait_key for u in updates]},
+        )
+
+    await _emit(
+        deps,
+        TOPIC_DNA_UPDATED,
+        person_id=person_id,
+        payload={"trait_keys": [u.trait_key for u in updates], "count": written},
+    )
     return WriteDNAResponse(written=written)
 
 
@@ -380,10 +462,16 @@ async def take_dna_snapshot(
     deps: Annotated[Deps, Depends(get_deps)],
 ) -> SnapshotSummary:
     """Internal: M16 captures a versioned point-in-time snapshot of the DNA."""
-    _ = principal
     profile_id = await _resolve_profile_id(deps, person_id)
     async with admin_session(deps.session_factory) as session:
         result = await create_snapshot(session, profile_id=profile_id)
+        await _audit_mutation(
+            session,
+            action="dna.snapshot_created",
+            person_id=person_id,
+            actor=str(principal.person_id),
+            meta={"version": result["version"]},
+        )
     return SnapshotSummary(
         version=result["version"],
         taken_at=result["taken_at"],
@@ -482,6 +570,13 @@ async def observe_metric(
     async with admin_session(deps.session_factory) as session:
         summary = await record_observation(
             session, profile_id=profile_id, metric_key=body.metric_key, value=body.value
+        )
+        await _audit_mutation(
+            session,
+            action="baseline.observed",
+            person_id=person_id,
+            actor=str(principal.person_id),
+            meta={"metric_key": body.metric_key},
         )
     return BaselineView(metric_key=body.metric_key, distribution=summary)
 
