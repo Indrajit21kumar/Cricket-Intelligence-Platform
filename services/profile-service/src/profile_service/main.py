@@ -1,19 +1,7 @@
-"""FastAPI entrypoint for the CIP reference service.
+"""FastAPI entrypoint for the CIP profile-service (M04).
 
-Every CIP service follows this shape:
-
-1. Build service :class:`ServiceSettings` (env + secret store).
-2. Install ``cip-core`` middleware + exception handlers on the FastAPI app.
-3. Install ``cip-observability`` (logs + traces + metrics + FastAPI/SQLAlchemy
-   instrumentation).
-4. In the lifespan, build the runtime :class:`Deps` (DB engine, event bus,
-   idempotency store) and stash them on ``app.state``. Shut them down on
-   exit.
-5. Mount routers.
-
-New services scaffolded from this template inherit the same structure so
-Book 3's cross-cutting requirements are satisfied by construction, per
-M01 §1.
+Wires cip-core middleware, cip-observability, lifespan-managed Deps, and
+mounts the player-profile routers.
 """
 
 from __future__ import annotations
@@ -29,7 +17,7 @@ from profile_service import __version__
 from profile_service.deps import build_deps, shutdown_deps
 from profile_service.health import router as health_router
 from profile_service.health import version_router
-from profile_service.routes import router as demo_router
+from profile_service.routes import profiles_router
 from profile_service.settings import get_service_settings
 
 
@@ -51,11 +39,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="CIP profile-service",
         version=__version__,
-        description=(
-            "Template service. Wires cip-core middleware, cip-observability "
-            "(logs + traces + metrics), cip-data (async SQLAlchemy + RLS), "
-            "and cip-events (Kafka-wire pub/sub + idempotent consumer)."
-        ),
+        description="Player Profile (M04) — attributes, Cricket DNA, history.",
         lifespan=lifespan,
     )
 
@@ -66,7 +50,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(version_router)
-    app.include_router(demo_router)
+    app.include_router(profiles_router)
 
     return app
 

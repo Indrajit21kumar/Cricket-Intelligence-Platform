@@ -15,6 +15,15 @@ from cip_core.auth import (
     require_role,
     verify_token,
 )
+from cip_core.consent import (
+    CONSENT_PROCESSING,
+    CONSENT_SHARING,
+    AccessDecision,
+    check_profile_access,
+    has_active_consent,
+    has_verified_guardianship,
+    shared_active_tenants,
+)
 from cip_core.context import (
     MissingTenantError,
     correlation_scope,
@@ -67,12 +76,15 @@ __version__ = "0.1.0"
 
 __all__ = [
     "ACCESS_TOKEN_TYPE",
+    "CONSENT_PROCESSING",
+    "CONSENT_SHARING",
     "CORRELATION_HEADER",
     "DEFAULT_ALGORITHM",
     "IDEMPOTENCY_HEADER",
     "MAX_KEY_LENGTH",
     "REFRESH_TOKEN_TYPE",
     "TENANT_HEADER",
+    "AccessDecision",
     "AuthenticatedPrincipal",
     "BadRequest",
     "CIPError",
@@ -101,10 +113,13 @@ __all__ = [
     "__version__",
     "audit_record",
     "build_provider",
+    "check_profile_access",
     "correlation_scope",
     "get_correlation_id",
     "get_settings",
     "get_tenant_id",
+    "has_active_consent",
+    "has_verified_guardianship",
     "idempotency_key",
     "install",
     "new_correlation_id",
@@ -113,6 +128,7 @@ __all__ = [
     "require_role",
     "require_tenant_id",
     "roles",
+    "shared_active_tenants",
     "tenant_scope",
     "verify_token",
 ]
