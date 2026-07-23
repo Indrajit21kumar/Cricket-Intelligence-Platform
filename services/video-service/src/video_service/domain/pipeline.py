@@ -18,6 +18,8 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from video_service.domain.angle import classify_angle
+from video_service.domain.calibrations import upsert_calibration
 from video_service.domain.ingestions import STATUS_PROCESSING, set_status
 from video_service.domain.processing_results import save_processing_result
 from video_service.domain.processor import ClipMeasurements, VideoProcessor
@@ -33,6 +35,10 @@ class PipelineOutcome:
     frame_count: int
     fps: float
     measurements: ClipMeasurements
+    # Step 4 — camera angle.
+    camera_angle: str = "other"
+    angle_supported: bool = False
+    angle_recommendation: str | None = None
 
 
 async def run_pipeline(
@@ -52,6 +58,7 @@ async def run_pipeline(
 
     await set_status(session, ingestion_id, STATUS_PROCESSING)
 
+    # --- Preprocess (Step 3) ----------------------------------------------
     result = await processor.preprocess(raw_ref=raw_ref)
     m = result.measurements
     await save_processing_result(
@@ -66,6 +73,17 @@ async def run_pipeline(
         duration_s=m.duration_s,
     )
 
+    # --- Camera angle (Step 4) --------------------------------------------
+    angle = classify_angle(angle_hint=m.angle_hint, angle_confidence=m.angle_confidence)
+    # Persist the angle now (spatial_confidence stays 'low' provisionally;
+    # Step 5 computes the real value + pixel_to_meter from stump/height).
+    await upsert_calibration(
+        session,
+        tenant_id=tenant_id,
+        ingestion_id=ingestion_id,
+        camera_angle=angle.camera_angle,
+    )
+
     return PipelineOutcome(
         ingestion_id=ingestion_id,
         status=STATUS_PROCESSING,
@@ -73,4 +91,7 @@ async def run_pipeline(
         frame_count=m.frame_count,
         fps=m.fps,
         measurements=m,
+        camera_angle=angle.camera_angle,
+        angle_supported=angle.supported,
+        angle_recommendation=angle.recommendation,
     )

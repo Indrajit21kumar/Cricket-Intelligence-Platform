@@ -37,6 +37,7 @@ from cip_core import (
 )
 from cip_data import tenant_session
 from video_service.deps import Deps, get_deps
+from video_service.domain.calibrations import get_calibration
 from video_service.domain.ingestions import (
     create_ingestion,
     get_ingestion,
@@ -73,6 +74,14 @@ class ProcessingView(BaseModel):
     duration_s: float | None = None
 
 
+class CalibrationView(BaseModel):
+    camera_angle: str | None = None
+    pixel_to_meter: float | None = None
+    spatial_confidence: str | None = None
+    depth_estimated: bool | None = None
+    method: str | None = None
+
+
 class IngestionView(BaseModel):
     id: uuid.UUID
     person_id: uuid.UUID
@@ -83,6 +92,7 @@ class IngestionView(BaseModel):
     size_bytes: int | None = None
     created_at: datetime | None = None
     processing: ProcessingView | None = None
+    calibration: CalibrationView | None = None
 
 
 def _ingestion_view(row: dict[str, Any]) -> IngestionView:
@@ -171,6 +181,9 @@ class CompleteResponse(BaseModel):
     normalized_ref: str
     frame_count: int
     fps: float
+    camera_angle: str
+    angle_supported: bool
+    angle_recommendation: str | None = None
 
 
 @videos_router.post("/{ingestion_id}/complete", response_model=CompleteResponse)
@@ -209,6 +222,9 @@ async def complete_upload(
         normalized_ref=outcome.normalized_ref,
         frame_count=outcome.frame_count,
         fps=outcome.fps,
+        camera_angle=outcome.camera_angle,
+        angle_supported=outcome.angle_supported,
+        angle_recommendation=outcome.angle_recommendation,
     )
 
 
@@ -226,18 +242,23 @@ async def get_video(
         if ingestion is None:
             raise NotFound("Ingestion not found")
         processing = await get_processing_result(session, ingestion_id)
-    view = _ingestion_view(ingestion)
+        calibration = await get_calibration(session, ingestion_id)
+    updates: dict[str, object] = {}
     if processing is not None:
-        view = view.model_copy(
-            update={
-                "processing": ProcessingView(
-                    normalized_ref=processing["normalized_ref"],
-                    frame_count=processing["frame_count"],
-                    fps=processing["fps"],
-                    width=processing["width"],
-                    height=processing["height"],
-                    duration_s=processing["duration_s"],
-                )
-            }
+        updates["processing"] = ProcessingView(
+            normalized_ref=processing["normalized_ref"],
+            frame_count=processing["frame_count"],
+            fps=processing["fps"],
+            width=processing["width"],
+            height=processing["height"],
+            duration_s=processing["duration_s"],
         )
-    return view
+    if calibration is not None:
+        updates["calibration"] = CalibrationView(
+            camera_angle=calibration["camera_angle"],
+            pixel_to_meter=calibration["pixel_to_meter"],
+            spatial_confidence=calibration["spatial_confidence"],
+            depth_estimated=calibration["depth_estimated"],
+            method=calibration["method"],
+        )
+    return _ingestion_view(ingestion).model_copy(update=updates)
