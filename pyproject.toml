@@ -79,6 +79,7 @@ known-first-party = [
     "identity_service",
     "billing_service",
     "profile_service",
+    "video_service",
 ]
 
 [tool.ruff.format]
