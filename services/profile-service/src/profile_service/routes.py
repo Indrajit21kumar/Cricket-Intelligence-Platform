@@ -19,6 +19,7 @@ and events + audit (7).
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends
@@ -33,10 +34,19 @@ from cip_core import (
     check_profile_access,
     has_active_consent,
     require_authenticated,
+    require_role,
     roles,
 )
 from cip_data import admin_session
 from profile_service.deps import Deps, get_deps
+from profile_service.domain.dna import (
+    PROVENANCE_VALUES,
+    TraitUpdate,
+    get_current_dna,
+    get_trait_history,
+    reconstruct_dna_at,
+    write_traits,
+)
 from profile_service.domain.profiles import (
     create_profile,
     get_attributes,
@@ -50,9 +60,15 @@ profiles_router = APIRouter(prefix="/v1/players", tags=["profiles"])
 # profile is low-risk — the sensitive data (DNA) is written only by M16.
 _CREATE_ROLES = (roles.ACADEMY_ADMIN, roles.ORG_ADMIN, roles.PLATFORM_ADMIN)
 
+# The service identity M16 (Cricket DNA engine) presents to write traits.
+# It is NOT one of the six human roles — only M16's token carries this scope,
+# which is what makes "only M16 can write traits" (AC-M04-03) enforceable.
+DNA_WRITER_ROLE = "service.cricket_dna"
+
 Stance = Literal["right-hand-bat", "left-hand-bat"]
 AgeBand = Literal["u13", "u16", "u19", "senior"]
 Hand = Literal["right", "left"]
+Provenance = Literal["measured", "estimated", "modelled"]
 
 
 class ProfileAttributes(BaseModel):
@@ -203,3 +219,113 @@ async def read_attributes_fast(
         age_band=attrs.age_band,
         dominant_hand=attrs.dominant_hand,
     )
+
+
+# --- Cricket DNA (M04 Step 3, AC-M04-03, FR-M04-03/04) ----------------------
+
+
+class TraitUpdateIn(BaseModel):
+    trait_key: str = Field(..., min_length=1, description="e.g. 'trait.aggression'")
+    value: str = Field(..., description="Stringified score/label (trait-typed)")
+    provenance: Provenance
+    confidence: float | None = Field(None, ge=0.0, le=1.0)
+    source_ref: str | None = Field(None, description="e.g. 'report:<uuid>'")
+
+
+class WriteDNARequest(BaseModel):
+    updates: list[TraitUpdateIn] = Field(..., min_length=1)
+
+
+class WriteDNAResponse(BaseModel):
+    written: int
+
+
+class TraitView(BaseModel):
+    trait_key: str
+    value: str
+    confidence: float | None
+    provenance: str
+    source_ref: str | None = None
+    updated_at: datetime | None = None
+    snapshot_at: datetime | None = None
+
+
+async def _resolve_profile_id(deps: Deps, person_id: uuid.UUID) -> uuid.UUID:
+    async with admin_session(deps.session_factory) as session:
+        profile = await get_profile_by_person(session, person_id)
+    if profile is None:
+        raise NotFound("Profile not found")
+    return profile["id"]  # type: ignore[no-any-return]
+
+
+@profiles_router.post("/{person_id}/dna", response_model=WriteDNAResponse, status_code=201)
+async def write_dna(
+    person_id: uuid.UUID,
+    body: WriteDNARequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(DNA_WRITER_ROLE))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> WriteDNAResponse:
+    """Internal: M16 writes trait updates (only the DNA-engine role, AC-M04-03).
+
+    Each update UPSERTs the current value and appends an immutable history row
+    (NFR-M04-02). Provenance + confidence come from M16 (FR-M04-04).
+    """
+    _ = principal  # the require_role gate is the "only M16" enforcement
+    # Belt-and-braces: reject unknown provenance values (pydantic Literal
+    # already constrains this, but the domain constant is the source of truth).
+    for u in body.updates:
+        if u.provenance not in PROVENANCE_VALUES:
+            raise Forbidden("Invalid provenance", details={"provenance": u.provenance})
+
+    profile_id = await _resolve_profile_id(deps, person_id)
+    updates = [
+        TraitUpdate(
+            trait_key=u.trait_key,
+            value=u.value,
+            provenance=u.provenance,
+            confidence=u.confidence,
+            source_ref=u.source_ref,
+        )
+        for u in body.updates
+    ]
+    async with admin_session(deps.session_factory) as session:
+        written = await write_traits(session, profile_id=profile_id, updates=updates)
+    return WriteDNAResponse(written=written)
+
+
+@profiles_router.get("/{person_id}/dna", response_model=list[TraitView])
+async def read_dna(
+    person_id: uuid.UUID,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> list[TraitView]:
+    """Read the player's current Cricket DNA (consent-scoped)."""
+    await _require_read_access(deps, subject=person_id, principal=principal, purpose="read_dna")
+    profile_id = await _resolve_profile_id(deps, person_id)
+    async with admin_session(deps.session_factory) as session:
+        traits = await get_current_dna(session, profile_id)
+    return [TraitView(**t) for t in traits]
+
+
+@profiles_router.get("/{person_id}/dna/history", response_model=list[TraitView])
+async def read_dna_history(
+    person_id: uuid.UUID,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+    trait_key: str | None = None,
+    at: datetime | None = None,
+) -> list[TraitView]:
+    """Read trait history, or reconstruct the DNA as of ``at`` (NFR-M04-02).
+
+    - ``?trait_key=`` filters history to one trait.
+    - ``?at=`` (ISO-8601) returns the reconstructed value per trait as of that
+      instant instead of the full history.
+    """
+    await _require_read_access(deps, subject=person_id, principal=principal, purpose="read_dna")
+    profile_id = await _resolve_profile_id(deps, person_id)
+    async with admin_session(deps.session_factory) as session:
+        if at is not None:
+            rows = await reconstruct_dna_at(session, profile_id, at)
+        else:
+            rows = await get_trait_history(session, profile_id, trait_key=trait_key)
+    return [TraitView(**r) for r in rows]
