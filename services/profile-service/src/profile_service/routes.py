@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 from cip_core import (
     CONSENT_PROCESSING,
     AuthenticatedPrincipal,
+    BadRequest,
     Conflict,
     Forbidden,
     NotFound,
@@ -39,6 +40,12 @@ from cip_core import (
 )
 from cip_data import admin_session
 from profile_service.deps import Deps, get_deps
+from profile_service.domain.baseline import (
+    get_baseline,
+    is_valid_metric_id,
+    list_baselines,
+    record_observation,
+)
 from profile_service.domain.dna import (
     PROVENANCE_VALUES,
     TraitUpdate,
@@ -70,6 +77,10 @@ _CREATE_ROLES = (roles.ACADEMY_ADMIN, roles.ORG_ADMIN, roles.PLATFORM_ADMIN)
 # It is NOT one of the six human roles — only M16's token carries this scope,
 # which is what makes "only M16 can write traits" (AC-M04-03) enforceable.
 DNA_WRITER_ROLE = "service.cricket_dna"
+
+# The analysis pipeline (M10 / physics) presents this scope to record metric
+# observations that build the personal baseline.
+BASELINE_WRITER_ROLE = "service.metrics"
 
 Stance = Literal["right-hand-bat", "left-hand-bat"]
 AgeBand = Literal["u13", "u16", "u19", "senior"]
@@ -427,3 +438,96 @@ async def read_progress(
         TrendPoint(period_start=r["period_start"], value=r["value"], confidence=r["confidence"])
         for r in rows
     ]
+
+
+# --- Personal baseline (M04 Step 5, AC-M04-05, FR-M04-06) --------------------
+
+
+class ObserveMetricRequest(BaseModel):
+    metric_key: str = Field(..., description="CIP-STD metric id, e.g. 'BM-01'")
+    value: float
+
+
+class BaselineView(BaseModel):
+    """Personal baseline in the CIP-STD metric shape (served to M15)."""
+
+    metric_key: str
+    distribution: dict[str, Any]
+    updated_at: datetime | None = None
+
+
+@profiles_router.post("/{person_id}/baseline", response_model=BaselineView, status_code=201)
+async def observe_metric(
+    person_id: uuid.UUID,
+    body: ObserveMetricRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(BASELINE_WRITER_ROLE))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> BaselineView:
+    """Internal: the analysis pipeline records a metric observation.
+
+    Appends the value to the player's personal baseline for that CIP-STD metric
+    and returns the recomputed distribution. Only the metrics-writer service
+    scope may write (M10 / physics pipeline).
+    """
+    _ = principal
+    if not is_valid_metric_id(body.metric_key):
+        raise BadRequest(
+            "metric_key must be a CIP-STD metric id (e.g. 'BM-01')",
+            details={"metric_key": body.metric_key},
+        )
+    profile_id = await _resolve_profile_id(deps, person_id)
+    async with admin_session(deps.session_factory) as session:
+        summary = await record_observation(
+            session, profile_id=profile_id, metric_key=body.metric_key, value=body.value
+        )
+    return BaselineView(metric_key=body.metric_key, distribution=summary)
+
+
+@profiles_router.get("/{person_id}/baseline", response_model=list[BaselineView])
+async def list_personal_baselines(
+    person_id: uuid.UUID,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> list[BaselineView]:
+    """Internal read for M15: all personal baselines in the CIP-STD shape.
+
+    Gated on the subject's active 'processing' consent (analysis-derived data,
+    same rule as the M10 attribute path — AC-M04-02/06)."""
+    _ = principal
+    async with admin_session(deps.session_factory) as session:
+        if not await has_active_consent(
+            session, person_id=person_id, consent_type=CONSENT_PROCESSING
+        ):
+            raise Forbidden(
+                "Subject has not consented to processing", details={"reason": "no_consent"}
+            )
+        profile = await get_profile_by_person(session, person_id)
+        if profile is None:
+            raise NotFound("Profile not found")
+        rows = await list_baselines(session, profile["id"])
+    return [BaselineView(**r) for r in rows]
+
+
+@profiles_router.get("/{person_id}/baseline/{metric_key}", response_model=BaselineView)
+async def read_personal_baseline(
+    person_id: uuid.UUID,
+    metric_key: str,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> BaselineView:
+    """Internal read for M15: one metric's personal baseline (CIP-STD shape)."""
+    _ = principal
+    async with admin_session(deps.session_factory) as session:
+        if not await has_active_consent(
+            session, person_id=person_id, consent_type=CONSENT_PROCESSING
+        ):
+            raise Forbidden(
+                "Subject has not consented to processing", details={"reason": "no_consent"}
+            )
+        profile = await get_profile_by_person(session, person_id)
+        if profile is None:
+            raise NotFound("Profile not found")
+        baseline = await get_baseline(session, profile["id"], metric_key)
+    if baseline is None:
+        raise NotFound("Baseline not found for that metric")
+    return BaselineView(**baseline)
