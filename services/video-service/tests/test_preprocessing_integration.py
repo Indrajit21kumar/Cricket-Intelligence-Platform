@@ -89,7 +89,8 @@ class TestPreprocessing:
         )
         assert r.status_code == 200, r.text
         body = r.json()
-        assert body["status"] == "processing"
+        # A good clip is admitted and runs to 'normalized' (later steps publish).
+        assert body["status"] == "normalized"
         # Normalised clip key derives from the raw key.
         assert body["normalized_ref"] == normalized_key(created["raw_ref"])
         assert body["frame_count"] == 300  # fake good clip

@@ -125,8 +125,8 @@ class TestUploadFlow:
             f"/v1/videos/{created['ingestion_id']}/complete", headers=_headers(tenant_id)
         )
         assert r.status_code == 200, r.text
-        # /complete now runs preprocessing (Step 3) -> status 'processing'.
-        assert r.json()["status"] == "processing"
+        # /complete runs the full pipeline; a good clip is admitted -> normalized.
+        assert r.json()["status"] == "normalized"
 
     async def test_get_status(
         self, app_client: tuple[FastAPI, httpx.AsyncClient], tenant_id: uuid.UUID

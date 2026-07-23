@@ -36,6 +36,7 @@ from cip_core import (
     require_tenant_id,
 )
 from cip_data import tenant_session
+from cip_events import EventEnvelope
 from video_service.deps import Deps, get_deps
 from video_service.domain.calibrations import get_calibration
 from video_service.domain.ingestions import (
@@ -47,6 +48,9 @@ from video_service.domain.processing_results import get_processing_result
 from video_service.domain.validation import validate_upload
 
 videos_router = APIRouter(prefix="/v1/videos", tags=["videos"])
+
+# The event M05 publishes to the downstream engines (M06-M09).
+TOPIC_VIDEO_NORMALIZED = "video.normalized"
 
 
 class CreateVideoRequest(BaseModel):
@@ -196,6 +200,7 @@ class CompleteResponse(BaseModel):
     calibration_method: str
     admitted: bool
     flags: list[QualityFlagView]
+    usage_recorded: bool = False
 
 
 @videos_router.post("/{ingestion_id}/complete", response_model=CompleteResponse)
@@ -245,6 +250,33 @@ async def complete_upload(
             },
         )
 
+    # --- Admitted (Step 7): meter usage + publish video.normalized --------
+    # Metering is exactly-once per clip (idempotency key = correlation_id), so
+    # a re-delivered /complete never double-counts (AC-M05-05, NFR-M05-05).
+    usage_recorded = await deps.entitlement_client.record_analysis_usage(
+        tenant_id=tenant_id,
+        idempotency_key=f"analysis.consumed:{outcome.correlation_id}",
+    )
+    # Publish the normalised clip + calibration + soft flags for M06-M09.
+    envelope = EventEnvelope(
+        correlation_id=outcome.correlation_id,
+        tenant_id=tenant_id,
+        schema_version="1.0.0",
+        idempotency_key=f"video.normalized:{outcome.ingestion_id}",
+        payload={
+            "ingestion_id": str(outcome.ingestion_id),
+            "person_id": str(outcome.person_id),
+            "normalized_ref": outcome.normalized_ref,
+            "camera_angle": outcome.camera_angle,
+            "pixel_to_meter": outcome.pixel_to_meter,
+            "spatial_confidence": outcome.spatial_confidence,
+            "depth_estimated": outcome.depth_estimated,
+            "calibration_method": outcome.calibration_method,
+            "quality_flags": [f.model_dump() for f in flag_views],
+        },
+    )
+    await deps.event_bus.publish(TOPIC_VIDEO_NORMALIZED, envelope)
+
     return CompleteResponse(
         ingestion_id=outcome.ingestion_id,
         status=outcome.status,
@@ -260,6 +292,7 @@ async def complete_upload(
         calibration_method=outcome.calibration_method,
         admitted=outcome.admitted,
         flags=flag_views,
+        usage_recorded=usage_recorded,
     )
 
 

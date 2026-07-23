@@ -20,7 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from video_service.domain.angle import classify_angle
 from video_service.domain.calibration import compute_calibration
 from video_service.domain.calibrations import upsert_calibration
-from video_service.domain.ingestions import STATUS_PROCESSING, STATUS_REJECTED, set_status
+from video_service.domain.ingestions import (
+    STATUS_NORMALIZED,
+    STATUS_PROCESSING,
+    STATUS_REJECTED,
+    set_status,
+)
 from video_service.domain.processing_results import save_processing_result
 from video_service.domain.processor import ClipMeasurements, VideoProcessor
 from video_service.domain.profile_client import ProfileClient
@@ -33,6 +38,8 @@ class PipelineOutcome:
     """Accumulates as the pipeline runs; later steps fill more fields."""
 
     ingestion_id: uuid.UUID
+    correlation_id: str
+    person_id: uuid.UUID
     status: str
     normalized_ref: str
     frame_count: int
@@ -66,6 +73,7 @@ async def run_pipeline(
     """
     ingestion_id: uuid.UUID = ingestion["id"]
     person_id: uuid.UUID = ingestion["person_id"]
+    correlation_id: str = ingestion["correlation_id"]
     raw_ref: str = ingestion["raw_ref"]
 
     await set_status(session, ingestion_id, STATUS_PROCESSING)
@@ -116,13 +124,16 @@ async def run_pipeline(
     gate = run_quality_gate(measurements=m, angle=angle)
     await replace_flags(session, tenant_id=tenant_id, ingestion_id=ingestion_id, flags=gate.flags)
     # A hard-fail rejects the clip; the route turns this into a 422 with
-    # reasons. Publishing (Step 7) only happens for admitted clips, so no GPU
-    # work is ever triggered for a rejected clip.
-    status = STATUS_PROCESSING if gate.admitted else STATUS_REJECTED
+    # reasons. An admitted clip is 'normalized' and the route publishes
+    # video.normalized + meters usage (Step 7). Publishing only happens for
+    # admitted clips, so no GPU work is ever triggered for a rejected clip.
+    status = STATUS_NORMALIZED if gate.admitted else STATUS_REJECTED
     await set_status(session, ingestion_id, status)
 
     return PipelineOutcome(
         ingestion_id=ingestion_id,
+        correlation_id=correlation_id,
+        person_id=person_id,
         status=status,
         normalized_ref=result.normalized_ref,
         frame_count=m.frame_count,
