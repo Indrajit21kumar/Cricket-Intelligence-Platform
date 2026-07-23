@@ -38,11 +38,11 @@ from cip_core import (
 from cip_data import tenant_session
 from video_service.deps import Deps, get_deps
 from video_service.domain.ingestions import (
-    STATUS_UPLOADED,
     create_ingestion,
     get_ingestion,
-    set_status,
 )
+from video_service.domain.pipeline import run_pipeline
+from video_service.domain.processing_results import get_processing_result
 from video_service.domain.validation import validate_upload
 
 videos_router = APIRouter(prefix="/v1/videos", tags=["videos"])
@@ -64,6 +64,15 @@ class CreateVideoResponse(BaseModel):
     status: str
 
 
+class ProcessingView(BaseModel):
+    normalized_ref: str | None = None
+    frame_count: int | None = None
+    fps: float | None = None
+    width: int | None = None
+    height: int | None = None
+    duration_s: float | None = None
+
+
 class IngestionView(BaseModel):
     id: uuid.UUID
     person_id: uuid.UUID
@@ -73,6 +82,7 @@ class IngestionView(BaseModel):
     content_type: str | None = None
     size_bytes: int | None = None
     created_at: datetime | None = None
+    processing: ProcessingView | None = None
 
 
 def _ingestion_view(row: dict[str, Any]) -> IngestionView:
@@ -155,16 +165,25 @@ async def create_video(
     )
 
 
-@videos_router.post("/{ingestion_id}/complete", response_model=IngestionView)
+class CompleteResponse(BaseModel):
+    ingestion_id: uuid.UUID
+    status: str
+    normalized_ref: str
+    frame_count: int
+    fps: float
+
+
+@videos_router.post("/{ingestion_id}/complete", response_model=CompleteResponse)
 async def complete_upload(
     ingestion_id: uuid.UUID,
     principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
     deps: Annotated[Deps, Depends(get_deps)],
-) -> IngestionView:
-    """Mark the upload complete once the client has PUT the object.
+) -> CompleteResponse:
+    """Mark the upload complete and run the processing pipeline.
 
-    Verifies the object is actually present in storage before transitioning
-    to ``uploaded`` (processing begins in Step 3).
+    Verifies the object is present, then runs preprocessing (Step 3). Later
+    steps extend the pipeline with angle detection, calibration, the quality
+    gate, and publishing.
     """
     _ = principal
     tenant_id = require_tenant_id()
@@ -177,9 +196,20 @@ async def complete_upload(
                 "Uploaded object not found in storage",
                 details={"reason": "object_missing"},
             )
-        updated = await set_status(session, ingestion_id, STATUS_UPLOADED)
-    assert updated is not None
-    return _ingestion_view(updated)
+        outcome = await run_pipeline(
+            session,
+            tenant_id=tenant_id,
+            ingestion=ingestion,
+            processor=deps.video_processor,
+        )
+
+    return CompleteResponse(
+        ingestion_id=outcome.ingestion_id,
+        status=outcome.status,
+        normalized_ref=outcome.normalized_ref,
+        frame_count=outcome.frame_count,
+        fps=outcome.fps,
+    )
 
 
 @videos_router.get("/{ingestion_id}", response_model=IngestionView)
@@ -188,11 +218,26 @@ async def get_video(
     principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
     deps: Annotated[Deps, Depends(get_deps)],
 ) -> IngestionView:
-    """Ingestion status (RLS scopes it to the caller's tenant)."""
+    """Ingestion status + processing details (RLS scopes it to the tenant)."""
     _ = principal
     tenant_id = require_tenant_id()
     async with tenant_session(deps.session_factory, tenant_id=tenant_id) as session:
         ingestion = await get_ingestion(session, ingestion_id)
-    if ingestion is None:
-        raise NotFound("Ingestion not found")
-    return _ingestion_view(ingestion)
+        if ingestion is None:
+            raise NotFound("Ingestion not found")
+        processing = await get_processing_result(session, ingestion_id)
+    view = _ingestion_view(ingestion)
+    if processing is not None:
+        view = view.model_copy(
+            update={
+                "processing": ProcessingView(
+                    normalized_ref=processing["normalized_ref"],
+                    frame_count=processing["frame_count"],
+                    fps=processing["fps"],
+                    width=processing["width"],
+                    height=processing["height"],
+                    duration_s=processing["duration_s"],
+                )
+            }
+        )
+    return view

@@ -114,7 +114,7 @@ class TestUploadFlow:
         assert body["raw_ref"].startswith(f"tenant/{tenant_id}/player/")
         assert body["status"] == "created"
 
-    async def test_complete_marks_uploaded(
+    async def test_complete_runs_pipeline(
         self, app_client: tuple[FastAPI, httpx.AsyncClient], tenant_id: uuid.UUID
     ) -> None:
         _app, client = app_client
@@ -125,7 +125,8 @@ class TestUploadFlow:
             f"/v1/videos/{created['ingestion_id']}/complete", headers=_headers(tenant_id)
         )
         assert r.status_code == 200, r.text
-        assert r.json()["status"] == "uploaded"
+        # /complete now runs preprocessing (Step 3) -> status 'processing'.
+        assert r.json()["status"] == "processing"
 
     async def test_get_status(
         self, app_client: tuple[FastAPI, httpx.AsyncClient], tenant_id: uuid.UUID

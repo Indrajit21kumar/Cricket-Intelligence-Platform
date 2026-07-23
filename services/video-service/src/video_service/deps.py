@@ -16,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
 from video_service.domain.entitlement import EntitlementClient, FakeEntitlementClient
+from video_service.domain.processor import FakeVideoProcessor, VideoProcessor
 from video_service.domain.storage import FakeStorageProvider, StorageProvider
 from video_service.settings import ServiceSettings
 
@@ -33,6 +34,8 @@ class Deps:
     storage: StorageProvider
     #: M03 entitlement + usage client (fake by default; real HTTP later).
     entitlement_client: EntitlementClient
+    #: Preprocessing adapter (fake by default; real ffmpeg/OpenCV later).
+    video_processor: VideoProcessor
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -44,6 +47,7 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     idempotency_store = RedisIdempotencyStore(settings.redis_url)
     storage: StorageProvider = FakeStorageProvider()
     entitlement_client: EntitlementClient = FakeEntitlementClient()
+    video_processor: VideoProcessor = FakeVideoProcessor()
     return Deps(
         settings=settings,
         engine=engine,
@@ -52,6 +56,7 @@ async def build_deps(settings: ServiceSettings) -> Deps:
         idempotency_store=idempotency_store,
         storage=storage,
         entitlement_client=entitlement_client,
+        video_processor=video_processor,
     )
 
 
