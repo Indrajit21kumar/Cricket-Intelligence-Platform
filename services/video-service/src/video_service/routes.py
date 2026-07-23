@@ -175,6 +175,12 @@ async def create_video(
     )
 
 
+class QualityFlagView(BaseModel):
+    code: str
+    severity: str  # fail | flag
+    message: str
+
+
 class CompleteResponse(BaseModel):
     ingestion_id: uuid.UUID
     status: str
@@ -188,6 +194,8 @@ class CompleteResponse(BaseModel):
     spatial_confidence: str
     depth_estimated: bool
     calibration_method: str
+    admitted: bool
+    flags: list[QualityFlagView]
 
 
 @videos_router.post("/{ingestion_id}/complete", response_model=CompleteResponse)
@@ -198,9 +206,10 @@ async def complete_upload(
 ) -> CompleteResponse:
     """Mark the upload complete and run the processing pipeline.
 
-    Verifies the object is present, then runs preprocessing (Step 3). Later
-    steps extend the pipeline with angle detection, calibration, the quality
-    gate, and publishing.
+    Runs preprocess -> angle -> calibrate -> quality gate. A clip that
+    hard-fails the gate is REJECTED (422 + actionable reasons); the rejection
+    + flags are persisted first, so the client can also fetch them later. An
+    admitted clip returns 200 with metadata + any soft flags.
     """
     _ = principal
     tenant_id = require_tenant_id()
@@ -221,6 +230,21 @@ async def complete_upload(
             profile_client=deps.profile_client,
         )
 
+    flag_views = [
+        QualityFlagView(code=f.code, severity=f.severity, message=f.message) for f in outcome.flags
+    ]
+
+    # Hard-fail -> 422 with actionable reasons (AC-M05-02). The rejection +
+    # flags are already committed above, so this is recorded, not lost.
+    if not outcome.admitted:
+        raise Unprocessable(
+            "Clip rejected by the quality gate",
+            details={
+                "reasons": [f.code for f in outcome.flags if f.severity == "fail"],
+                "flags": [f.model_dump() for f in flag_views],
+            },
+        )
+
     return CompleteResponse(
         ingestion_id=outcome.ingestion_id,
         status=outcome.status,
@@ -234,6 +258,8 @@ async def complete_upload(
         spatial_confidence=outcome.spatial_confidence,
         depth_estimated=outcome.depth_estimated,
         calibration_method=outcome.calibration_method,
+        admitted=outcome.admitted,
+        flags=flag_views,
     )
 
 

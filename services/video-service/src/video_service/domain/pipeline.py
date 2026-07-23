@@ -20,10 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from video_service.domain.angle import classify_angle
 from video_service.domain.calibration import compute_calibration
 from video_service.domain.calibrations import upsert_calibration
-from video_service.domain.ingestions import STATUS_PROCESSING, set_status
+from video_service.domain.ingestions import STATUS_PROCESSING, STATUS_REJECTED, set_status
 from video_service.domain.processing_results import save_processing_result
 from video_service.domain.processor import ClipMeasurements, VideoProcessor
 from video_service.domain.profile_client import ProfileClient
+from video_service.domain.quality_flags import replace_flags
+from video_service.domain.quality_gate import GateFlag, run_quality_gate
 
 
 @dataclass(slots=True)
@@ -45,6 +47,9 @@ class PipelineOutcome:
     spatial_confidence: str = "low"
     depth_estimated: bool = True
     calibration_method: str = "none"
+    # Step 6 — quality gate.
+    admitted: bool = False
+    flags: tuple[GateFlag, ...] = ()
 
 
 async def run_pipeline(
@@ -107,9 +112,18 @@ async def run_pipeline(
         method=calibration.method,
     )
 
+    # --- Quality gate (Step 6) — runs BEFORE any GPU stage (NFR-M05-02) ----
+    gate = run_quality_gate(measurements=m, angle=angle)
+    await replace_flags(session, tenant_id=tenant_id, ingestion_id=ingestion_id, flags=gate.flags)
+    # A hard-fail rejects the clip; the route turns this into a 422 with
+    # reasons. Publishing (Step 7) only happens for admitted clips, so no GPU
+    # work is ever triggered for a rejected clip.
+    status = STATUS_PROCESSING if gate.admitted else STATUS_REJECTED
+    await set_status(session, ingestion_id, status)
+
     return PipelineOutcome(
         ingestion_id=ingestion_id,
-        status=STATUS_PROCESSING,
+        status=status,
         normalized_ref=result.normalized_ref,
         frame_count=m.frame_count,
         fps=m.fps,
@@ -121,4 +135,6 @@ async def run_pipeline(
         spatial_confidence=calibration.spatial_confidence,
         depth_estimated=calibration.depth_estimated,
         calibration_method=calibration.method,
+        admitted=gate.admitted,
+        flags=gate.flags,
     )
