@@ -53,25 +53,35 @@ async def freeze_dataset(
     ``modality`` cuts a bat-only or ball-only corpus; omitted, it freezes both.
     """
     items: list[tuple[str, str, int]] = []
-    modality_clause = " AND modality = :mod" if modality else ""
+    # Two fully literal statement pairs rather than one interpolated template:
+    # nothing is built from a variable, so there is no injection surface to
+    # reason about and no suppression comment to trust.
     params: dict[str, object] = {"v": version}
     if modality:
         params["mod"] = modality
+        select_sql = (
+            "SELECT correlation_id, modality, frame_index FROM annotation_queue "
+            "WHERE dataset_version IS NULL AND modality = :mod "
+            "ORDER BY correlation_id, modality, frame_index"
+        )
+        update_sql = (
+            "UPDATE annotation_queue SET dataset_version = :v "
+            "WHERE dataset_version IS NULL AND modality = :mod"
+        )
+    else:
+        select_sql = (
+            "SELECT correlation_id, modality, frame_index FROM annotation_queue "
+            "WHERE dataset_version IS NULL "
+            "ORDER BY correlation_id, modality, frame_index"
+        )
+        update_sql = (
+            "UPDATE annotation_queue SET dataset_version = :v WHERE dataset_version IS NULL"
+        )
 
     for tenant_id in tenant_ids:
         async with tenant_session(session_factory, tenant_id=tenant_id) as session:
-            # Only the constant modality_clause is interpolated; values bind.
-            select_sql = (  # nosec B608
-                "SELECT correlation_id, modality, frame_index FROM annotation_queue "
-                f"WHERE dataset_version IS NULL{modality_clause} "
-                "ORDER BY correlation_id, modality, frame_index"
-            )
             rows = (await session.execute(text(select_sql), params)).all()
             items.extend((str(r[0]), str(r[1]), int(r[2])) for r in rows)
-            update_sql = (  # nosec B608
-                "UPDATE annotation_queue SET dataset_version = :v "
-                f"WHERE dataset_version IS NULL{modality_clause}"
-            )
             await session.execute(text(update_sql), params)
 
     checksum = dataset_checksum(items)

@@ -143,17 +143,20 @@ async def queue_size(
     modality: str | None = None,
 ) -> int:
     """Count queued frames, optionally for one clip and/or modality."""
-    clauses: list[str] = []
+    # Enumerated literal statements rather than an assembled string: there is
+    # no interpolation to audit, so no suppression comment to take on trust.
+    base = "SELECT count(*) FROM annotation_queue"
     params: dict[str, Any] = {}
-    if correlation_id is not None:
-        clauses.append("correlation_id = :corr")
-        params["corr"] = correlation_id
-    if modality is not None:
-        clauses.append("modality = :mod")
-        params["mod"] = modality
-    where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-    # Only the constant clause strings above are interpolated; every value is
-    # a bound parameter.
-    query = f"SELECT count(*) FROM annotation_queue{where}"  # nosec B608
+    if correlation_id is not None and modality is not None:
+        query = f"{base} WHERE correlation_id = :corr AND modality = :mod"
+        params = {"corr": correlation_id, "mod": modality}
+    elif correlation_id is not None:
+        query = f"{base} WHERE correlation_id = :corr"
+        params = {"corr": correlation_id}
+    elif modality is not None:
+        query = f"{base} WHERE modality = :mod"
+        params = {"mod": modality}
+    else:
+        query = base
     result = await session.execute(text(query), params)
     return int(result.scalar_one())
