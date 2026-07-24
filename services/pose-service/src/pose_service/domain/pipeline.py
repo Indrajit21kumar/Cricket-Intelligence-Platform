@@ -33,6 +33,11 @@ class PoseRunResult:
     mean_confidence: float
     quality: str  # ok | provisional | rejected
     depth_estimated: bool
+    #: The CIP-frame transform these keypoints are expressed in. Published so
+    #: M07/M08/M10 can place other objects in the same frame.
+    origin_x: float = 0.0
+    origin_y: float = 0.0
+    scale: float = 1.0
 
 
 def compute_pose_run(
@@ -76,4 +81,7 @@ def compute_pose_run(
         mean_confidence=conf.mean_confidence,
         quality=quality,
         depth_estimated=normalised.depth_estimated,
+        origin_x=normalised.origin_x,
+        origin_y=normalised.origin_y,
+        scale=normalised.scale,
     )

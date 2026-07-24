@@ -28,8 +28,13 @@ from pose_service.domain.keypoints import Keypoint
 @dataclass(frozen=True, slots=True)
 class NormalisedFrames:
     frames: tuple[tuple[Keypoint, ...], ...]
+    #: Pixel origin of the CIP frame + the divisor applied. These define the
+    #: transform, so they are part of the OUTPUT, not an internal detail:
+    #: M07's bat and M08's ball have to enter the same frame, and can only do
+    #: that if the frame's definition travels with the keypoints.
     origin_x: float
     origin_y: float
+    scale: float
     depth_estimated: bool
 
 
@@ -64,13 +69,17 @@ def normalise(
     depth_estimated: bool = False,
 ) -> NormalisedFrames:
     """Transform pixel keypoints into the CIP normalised frame (Y-up, origin at stance)."""
+    scale = float(frame_height) if frame_height > 0 else 1.0
     origin = _origin(frames)
     if origin is None:
         return NormalisedFrames(
-            frames=frames, origin_x=0.0, origin_y=0.0, depth_estimated=depth_estimated
+            frames=frames,
+            origin_x=0.0,
+            origin_y=0.0,
+            scale=scale,
+            depth_estimated=depth_estimated,
         )
     ox, oy = origin
-    scale = float(frame_height) if frame_height > 0 else 1.0
 
     out: list[tuple[Keypoint, ...]] = []
     for frame in frames:
@@ -87,5 +96,9 @@ def normalise(
         )
         out.append(nf)
     return NormalisedFrames(
-        frames=tuple(out), origin_x=ox, origin_y=oy, depth_estimated=depth_estimated
+        frames=tuple(out),
+        origin_x=ox,
+        origin_y=oy,
+        scale=scale,
+        depth_estimated=depth_estimated,
     )

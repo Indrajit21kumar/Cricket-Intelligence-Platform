@@ -115,7 +115,12 @@ class TestCompute:
         raw = await app.state.deps.artefact_store.load(key)
         assert raw is not None
         payload = json.loads(raw)
-        assert payload["schema"] == "pose.keypoints/1.0"
+        assert payload["schema"] == "pose.keypoints/1.1"
+        # The CIP-frame transform ships with the keypoints, so M07/M08/M10 can
+        # place the bat and ball in the same frame as the body.
+        assert payload["frame"]["y_up"] is True
+        assert payload["frame"]["scale"] == 1080
+        assert payload["frame"]["origin_y"] > 0
         assert len(payload["frames"]) == 30
         for frame in payload["frames"]:
             assert len(frame) == 17  # canonical joint set
@@ -254,6 +259,8 @@ class TestPublish:
             assert env.payload["frame_count"] == 30
             assert env.payload["model_version"] == "fake-pose-v1"
             assert env.payload["depth_estimated"] is True
+            assert env.payload["frame"]["scale"] == 1080
+            assert env.payload["frame"]["y_up"] is True
             # M05 calibration + quality context propagates downstream (FR-M06-08).
             assert env.payload["camera_angle"] == "side_on"
             assert env.payload["spatial_confidence"] == "high"

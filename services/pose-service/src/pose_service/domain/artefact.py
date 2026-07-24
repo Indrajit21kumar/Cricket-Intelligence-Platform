@@ -21,10 +21,28 @@ def artefact_key(*, tenant_id: uuid.UUID, correlation_id: str) -> str:
     return f"tenant/{tenant_id}/pose/{correlation_id}/keypoints.json"
 
 
-def serialise_frames(frames: tuple[tuple[Keypoint, ...], ...]) -> str:
-    """Serialise the per-frame keypoint sequence to a compact JSON payload."""
+def serialise_frames(
+    frames: tuple[tuple[Keypoint, ...], ...],
+    *,
+    origin_x: float = 0.0,
+    origin_y: float = 0.0,
+    scale: float = 1.0,
+) -> str:
+    """Serialise the per-frame keypoint sequence to a compact JSON payload.
+
+    The ``frame`` block records the CIP-frame transform these coordinates are
+    expressed in (pixel origin, divisor, Y-up). Consumers that need to place
+    something else — M07's bat, M08's ball — into the same frame cannot do so
+    without it, so it ships with the keypoints rather than being re-derived.
+    """
     payload = {
-        "schema": "pose.keypoints/1.0",
+        "schema": "pose.keypoints/1.1",
+        "frame": {
+            "origin_x": origin_x,
+            "origin_y": origin_y,
+            "scale": scale,
+            "y_up": True,
+        },
         "frames": [
             [
                 {

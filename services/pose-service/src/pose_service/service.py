@@ -67,7 +67,15 @@ async def process_normalized(
     artefact_ref: str | None = None
     if result.frames:
         key = artefact_key(tenant_id=tenant_id, correlation_id=correlation_id)
-        artefact_ref = await artefact_store.save(key, serialise_frames(result.frames))
+        artefact_ref = await artefact_store.save(
+            key,
+            serialise_frames(
+                result.frames,
+                origin_x=result.origin_x,
+                origin_y=result.origin_y,
+                scale=result.scale,
+            ),
+        )
 
     async with tenant_session(session_factory, tenant_id=tenant_id) as session:
         row = await upsert_pose_run(
@@ -105,6 +113,14 @@ async def process_normalized(
             "quality": result.quality,
             "rejection_code": rejection_code,
             "depth_estimated": result.depth_estimated,
+            # The CIP-frame transform, so M07/M08/M10 can place the bat, the
+            # ball and their derived geometry in the same frame as the body.
+            "frame": {
+                "origin_x": result.origin_x,
+                "origin_y": result.origin_y,
+                "scale": result.scale,
+                "y_up": True,
+            },
             "camera_angle": camera_angle,
             "spatial_confidence": spatial_confidence,
             "quality_flags": quality_flags or [],
