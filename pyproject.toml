@@ -80,6 +80,7 @@ known-first-party = [
     "billing_service",
     "profile_service",
     "video_service",
+    "pose_service",
 ]
 
 [tool.ruff.format]
