@@ -18,10 +18,13 @@ from cip_core.auth import (
 from cip_core.consent import (
     CONSENT_PROCESSING,
     CONSENT_SHARING,
+    CONSENT_TRAINING,
     AccessDecision,
+    TrainingConsentDecision,
     check_profile_access,
     has_active_consent,
     has_verified_guardianship,
+    may_use_for_training,
     shared_active_tenants,
 )
 from cip_core.context import (
@@ -78,6 +81,7 @@ __all__ = [
     "ACCESS_TOKEN_TYPE",
     "CONSENT_PROCESSING",
     "CONSENT_SHARING",
+    "CONSENT_TRAINING",
     "CORRELATION_HEADER",
     "DEFAULT_ALGORITHM",
     "IDEMPOTENCY_HEADER",
@@ -108,6 +112,7 @@ __all__ = [
     "SecretProvider",
     "ServiceUnavailable",
     "Settings",
+    "TrainingConsentDecision",
     "Unauthenticated",
     "Unprocessable",
     "__version__",
@@ -122,6 +127,7 @@ __all__ = [
     "has_verified_guardianship",
     "idempotency_key",
     "install",
+    "may_use_for_training",
     "new_correlation_id",
     "require_authenticated",
     "require_idempotency_key",

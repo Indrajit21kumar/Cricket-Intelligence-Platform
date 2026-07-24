@@ -26,6 +26,9 @@ TEST_JWT_SECRET = "test-jwt-signing-key-do-not-use-in-any-real-environment-42"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BASE_MIGRATIONS = REPO_ROOT / "migrations" / "base"
+# M07's consent gate reads M02-owned tables (persons, consents, guardianships),
+# so the identity schema must exist for the annotation pipeline to be testable.
+IDENTITY_MIGRATIONS = REPO_ROOT / "services" / "identity-service" / "migrations"
 BAT_MIGRATIONS = REPO_ROOT / "services" / "bat-service" / "migrations"
 
 
@@ -51,6 +54,7 @@ def _migrated_database() -> str:
     """
     url = _database_url()
     upgrade_head(url, migrations_dir=BASE_MIGRATIONS)
+    upgrade_head(url, migrations_dir=IDENTITY_MIGRATIONS)
     upgrade_head(url, migrations_dir=BAT_MIGRATIONS)
     return url
 

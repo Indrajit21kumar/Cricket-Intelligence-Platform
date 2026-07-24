@@ -41,6 +41,11 @@ from cip_core import roles
 CONSENT_PROCESSING = "processing"
 #: Consent that the subject's profile/DNA may be shared with coaches/staff.
 CONSENT_SHARING = "sharing"
+#: Consent that the subject's CLIPS may be retained and labelled as MODEL
+#: TRAINING DATA. Deliberately distinct from :data:`CONSENT_PROCESSING`:
+#: agreeing to have your own batting analysed is not agreeing to become
+#: someone else's training corpus (Book 1 data strategy; M07 §12).
+CONSENT_TRAINING = "training"
 
 #: Roles that can read an assigned player's profile *if* sharing is consented.
 _COACHING_ROLES = (roles.COACH, roles.ACADEMY_ADMIN, roles.ORG_ADMIN)
@@ -179,3 +184,65 @@ async def check_profile_access(
         return AccessDecision(allowed=False, reason="no_consent")
 
     return AccessDecision(allowed=False, reason="not_permitted")
+
+
+@dataclass(frozen=True, slots=True)
+class TrainingConsentDecision:
+    """Outcome of a training-data consent check, with an auditable reason."""
+
+    allowed: bool
+    reason: str  # training_consent | guardian_consent | no_training_consent |
+    #              minor_requires_guardian_consent | unknown_person
+
+
+async def may_use_for_training(
+    session: AsyncSession,
+    *,
+    person_id: uuid.UUID,
+    tenant_id: uuid.UUID | None = None,
+) -> TrainingConsentDecision:
+    """Decide whether this person's frames may enter the annotation corpus.
+
+    Deny by default. An adult needs a live :data:`CONSENT_TRAINING`. A MINOR
+    needs that consent to have been granted **by a verified guardian** — a
+    child cannot sign their own data into a training set, so a self-granted
+    consent on a minor's account is refused (Book 0 §11.1, M07 AC-M07-07).
+
+    Withdrawal is honoured implicitly: ``withdrawn_at`` filtering means a
+    person who revokes training consent stops qualifying immediately, and
+    already-queued frames are removed by the caller's withdrawal handling.
+    """
+    person = (
+        await session.execute(
+            text("SELECT dob_band FROM persons WHERE id = :pid"),
+            {"pid": person_id},
+        )
+    ).first()
+    if person is None:
+        return TrainingConsentDecision(allowed=False, reason="unknown_person")
+
+    granted_by = [
+        row[0]
+        for row in (
+            await session.execute(
+                text(
+                    "SELECT granted_by FROM consents "
+                    "WHERE person_id = :pid AND type = :ct AND withdrawn_at IS NULL "
+                    "  AND (tenant_id IS NULL OR tenant_id = :tid OR :tid IS NULL)"
+                ),
+                {"pid": person_id, "ct": CONSENT_TRAINING, "tid": tenant_id},
+            )
+        ).all()
+    ]
+    if not granted_by:
+        return TrainingConsentDecision(allowed=False, reason="no_training_consent")
+
+    if person[0] != "minor":
+        return TrainingConsentDecision(allowed=True, reason="training_consent")
+
+    for guardian_id in granted_by:
+        if await has_verified_guardianship(
+            session, minor_person_id=person_id, guardian_person_id=guardian_id
+        ):
+            return TrainingConsentDecision(allowed=True, reason="guardian_consent")
+    return TrainingConsentDecision(allowed=False, reason="minor_requires_guardian_consent")
