@@ -29,6 +29,11 @@ BASE_MIGRATIONS = REPO_ROOT / "migrations" / "base"
 # M08's annotation consent gate reads M02-owned tables (persons, consents, guardianships),
 # so the identity schema must exist for the annotation pipeline to be testable.
 IDENTITY_MIGRATIONS = REPO_ROOT / "services" / "identity-service" / "migrations"
+# The annotation_queue tables are owned by bat-service's Alembic project (M07
+# created them) and SHARED with M08 through cip-annotation, so M08's test
+# database needs M07's schema. Applying it explicitly rather than relying on
+# whatever another service's test run happened to leave behind.
+BAT_MIGRATIONS = REPO_ROOT / "services" / "bat-service" / "migrations"
 BALL_MIGRATIONS = REPO_ROOT / "services" / "ball-service" / "migrations"
 
 
@@ -46,7 +51,7 @@ def _database_url() -> str:
 
 @pytest.fixture(scope="session")
 def _migrated_database() -> str:
-    """Apply base + bat migrations once for the session (idempotent).
+    """Apply base + identity + bat + ball migrations once (idempotent).
 
     Sync fixture — must NOT be async, because ``upgrade_head`` uses
     ``asyncio.run`` internally and would collide with the pytest-asyncio
@@ -55,6 +60,7 @@ def _migrated_database() -> str:
     url = _database_url()
     upgrade_head(url, migrations_dir=BASE_MIGRATIONS)
     upgrade_head(url, migrations_dir=IDENTITY_MIGRATIONS)
+    upgrade_head(url, migrations_dir=BAT_MIGRATIONS)
     upgrade_head(url, migrations_dir=BALL_MIGRATIONS)
     return url
 
