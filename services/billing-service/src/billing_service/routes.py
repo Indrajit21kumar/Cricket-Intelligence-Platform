@@ -47,7 +47,15 @@ from billing_service.domain.subscriptions import (
 )
 from billing_service.domain.usage import record_usage
 from billing_service.domain.usage_counter import current_period
-from cip_core import BadRequest, Conflict, NotFound, require_idempotency_key, require_role, roles
+from cip_core import (
+    BadRequest,
+    Conflict,
+    InternalError,
+    NotFound,
+    require_idempotency_key,
+    require_role,
+    roles,
+)
 from cip_core.auth import AuthenticatedPrincipal
 from cip_core.context import get_correlation_id, new_correlation_id
 from cip_data import admin_session, tenant_session
@@ -354,7 +362,8 @@ async def get_one(
         raise NotFound("Subscription not found")
     async with admin_session(deps.session_factory) as session:
         plan = await get_plan(session, sub["plan_id"])
-    assert plan is not None  # FK guarantees this
+    if plan is None:  # the FK guarantees this; a miss means the catalogue is corrupt
+        raise InternalError("Subscription references a plan that no longer exists")
     return _to_view(sub, plan["code"])
 
 
@@ -390,7 +399,8 @@ async def change_subscription(
             new_plan = await get_plan_by_code(session, body.plan_code)
             if new_plan is None:
                 raise NotFound(f"Plan '{body.plan_code}' not found")
-    assert old_plan is not None
+    if old_plan is None:  # FK-guaranteed, as above
+        raise InternalError("Subscription references a plan that no longer exists")
 
     proration: ProrationView | None = None
 
@@ -402,7 +412,10 @@ async def change_subscription(
             audit_action = "subscription.canceled"
             event_action = "canceled"
         else:
-            assert new_plan is not None
+            # Non-None here: plan_code was given (validated above) and a missing
+            # plan already raised NotFound.
+            if new_plan is None:
+                raise InternalError("Plan lookup lost between validation and change")
             if new_plan["id"] == old_plan["id"]:
                 raise BadRequest("Subscription is already on that plan")
             p = compute_proration(
