@@ -21,7 +21,7 @@ from typing import Any
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from bat_service.deps import Deps
-from bat_service.domain.annotation import enqueue_frames, select_frames
+from bat_service.domain.annotation import select_frames
 from bat_service.domain.artefact import ArtefactStore, artefact_key, serialise_track
 from bat_service.domain.bat import QUALITY_REJECTED
 from bat_service.domain.bat_runs import upsert_bat_run
@@ -29,6 +29,7 @@ from bat_service.domain.clip import ClipLoader
 from bat_service.domain.detector import BatDetector
 from bat_service.domain.pipeline import compute_bat_run
 from bat_service.domain.pose_client import PoseClient
+from cip_annotation import MODALITY_BAT, enqueue_frames
 from cip_data import tenant_session
 from cip_events import EventBus, EventEnvelope, IdempotencyStore, IdempotentConsumer
 
@@ -103,6 +104,7 @@ async def process_normalized(
             correlation_id=correlation_id,
             person_id=person_id,
             frames=select_frames(result.frames),
+            modality=MODALITY_BAT,
         )
 
     envelope = EventEnvelope(

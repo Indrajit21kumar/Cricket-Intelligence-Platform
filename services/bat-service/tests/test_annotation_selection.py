@@ -6,14 +6,14 @@ decision, enforced in test_annotation_integration.py.
 
 from __future__ import annotations
 
-from bat_service.domain.annotation import (
+from bat_service.domain.annotation import select_frames
+from bat_service.domain.bat import BLADE_TIP, BatFrame, BatPart
+from cip_annotation import (
     REASON_FAILED,
     REASON_LOW_CONFIDENCE,
     REASON_SAMPLED,
     dataset_checksum,
-    select_frames,
 )
-from bat_service.domain.bat import BLADE_TIP, BatFrame, BatPart
 
 
 def _frame(index: int, *, detected: bool = True, confidence: float = 0.9) -> BatFrame:
@@ -59,11 +59,11 @@ class TestSelection:
 
 class TestChecksum:
     def test_checksum_is_order_independent(self) -> None:
-        a = dataset_checksum([("clip-a", 1), ("clip-b", 2)])
-        b = dataset_checksum([("clip-b", 2), ("clip-a", 1)])
+        a = dataset_checksum([("clip-a", "bat", 1), ("clip-b", "bat", 2)])
+        b = dataset_checksum([("clip-b", "bat", 2), ("clip-a", "bat", 1)])
         assert a == b
 
     def test_checksum_changes_with_content(self) -> None:
-        a = dataset_checksum([("clip-a", 1)])
-        b = dataset_checksum([("clip-a", 2)])
+        a = dataset_checksum([("clip-a", "bat", 1)])
+        b = dataset_checksum([("clip-a", "bat", 2)])
         assert a != b

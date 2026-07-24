@@ -1,7 +1,7 @@
 [project]
 name = "ball-service"
 version = "0.1.0"
-description = "The runnable service template new CIP services copy from."
+description = "M08 Ball Tracking - ball events, line/length and ESTIMATED speed."
 requires-python = ">=3.12,<3.13"
 readme = "README.md"
 dependencies = [
@@ -9,6 +9,7 @@ dependencies = [
     "cip-observability",
     "cip-data",
     "cip-events",
+    "cip-annotation",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
 ]

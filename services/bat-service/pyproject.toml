@@ -9,6 +9,7 @@ dependencies = [
     "cip-observability",
     "cip-data",
     "cip-events",
+    "cip-annotation",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.32",
 ]

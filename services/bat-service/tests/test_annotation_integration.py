@@ -14,7 +14,8 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from bat_service.domain.annotation import (
+from cip_annotation import (
+    MODALITY_BAT,
     REASON_SAMPLED,
     SelectedFrame,
     enqueue_frames,
@@ -102,6 +103,7 @@ class TestConsentGate:
                 correlation_id=f"c-{uuid.uuid4().hex[:8]}",
                 person_id=person_id,
                 frames=_frames(),
+                modality=MODALITY_BAT,
             )
         assert result.allowed is True
         assert result.queued == 3
@@ -120,6 +122,7 @@ class TestConsentGate:
                 correlation_id=f"c-{uuid.uuid4().hex[:8]}",
                 person_id=person_id,
                 frames=_frames(),
+                modality=MODALITY_BAT,
             )
         assert result.allowed is False
         assert result.queued == 0
@@ -139,6 +142,7 @@ class TestConsentGate:
                 correlation_id=f"c-{uuid.uuid4().hex[:8]}",
                 person_id=person_id,
                 frames=_frames(),
+                modality=MODALITY_BAT,
             )
         assert result.allowed is False
         assert result.consent_reason == "no_training_consent"
@@ -153,6 +157,7 @@ class TestConsentGate:
                 correlation_id=f"c-{uuid.uuid4().hex[:8]}",
                 person_id=None,
                 frames=_frames(),
+                modality=MODALITY_BAT,
             )
         assert result.allowed is False
         assert result.consent_reason == "unknown_person"
@@ -173,6 +178,7 @@ class TestMinors:
                 correlation_id=f"c-{uuid.uuid4().hex[:8]}",
                 person_id=minor,
                 frames=_frames(),
+                modality=MODALITY_BAT,
             )
         assert result.allowed is False
         assert result.consent_reason == "minor_requires_guardian_consent"
@@ -193,6 +199,7 @@ class TestMinors:
                 correlation_id=f"c-{uuid.uuid4().hex[:8]}",
                 person_id=minor,
                 frames=_frames(),
+                modality=MODALITY_BAT,
             )
         assert result.allowed is False
         assert result.consent_reason == "minor_requires_guardian_consent"
@@ -212,6 +219,7 @@ class TestMinors:
                 correlation_id=f"c-{uuid.uuid4().hex[:8]}",
                 person_id=minor,
                 frames=_frames(2),
+                modality=MODALITY_BAT,
             )
         assert result.allowed is True
         assert result.queued == 2
@@ -234,6 +242,7 @@ class TestQueueMechanics:
                 correlation_id=correlation_id,
                 person_id=person_id,
                 frames=_frames(),
+                modality=MODALITY_BAT,
             )
         async with tenant_session(session_factory, tenant_id=tenant_id) as s:
             second = await enqueue_frames(
@@ -242,6 +251,7 @@ class TestQueueMechanics:
                 correlation_id=correlation_id,
                 person_id=person_id,
                 frames=_frames(),
+                modality=MODALITY_BAT,
             )
             total = await queue_size(s, correlation_id=correlation_id)
         assert first.queued == 3
@@ -263,6 +273,7 @@ class TestQueueMechanics:
                 correlation_id=correlation_id,
                 person_id=person_id,
                 frames=_frames(),
+                modality=MODALITY_BAT,
             )
         async with tenant_session(session_factory, tenant_id=tenant_id) as s:
             removed = await purge_person(s, person_id=person_id)
@@ -291,6 +302,7 @@ class TestQueueMechanics:
                 correlation_id=f"c-{uuid.uuid4().hex[:8]}",
                 person_id=person_id,
                 frames=_frames(),
+                modality=MODALITY_BAT,
             )
         assert result.allowed is False
         assert result.consent_reason == "no_training_consent"
@@ -313,6 +325,7 @@ class TestDatasetFreeze:
                 correlation_id=correlation_id,
                 person_id=person_id,
                 frames=_frames(4),
+                modality=MODALITY_BAT,
             )
         frozen = await freeze_dataset(
             session_factory, version=version, tenant_ids=[tenant_id], notes="test cut"

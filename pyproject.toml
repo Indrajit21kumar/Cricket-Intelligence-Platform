@@ -17,6 +17,7 @@ cip-core = { workspace = true }
 cip-observability = { workspace = true }
 cip-data = { workspace = true }
 cip-events = { workspace = true }
+cip-annotation = { workspace = true }
 
 [dependency-groups]
 dev = [
@@ -75,6 +76,7 @@ known-first-party = [
     "cip_observability",
     "cip_data",
     "cip_events",
+    "cip_annotation",
     "reference_service",
     "identity_service",
     "billing_service",
@@ -109,6 +111,7 @@ files = [
     "libs/cip-observability/src",
     "libs/cip-data/src",
     "libs/cip-events/src",
+    "libs/cip-annotation/src",
     # Glob picks up every current and future scaffolded service under services/
     # so a new service doesn't require editing pyproject.toml.
     "services/*/src",

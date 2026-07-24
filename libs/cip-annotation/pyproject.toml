@@ -1,0 +1,18 @@
+[project]
+name = "cip-annotation"
+version = "0.1.0"
+description = "CIP training-data flywheel: consent-gated annotation queue + versioned dataset manifests."
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+dependencies = [
+    "cip-core",
+    "cip-data",
+    "sqlalchemy[asyncio]>=2.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/cip_annotation"]

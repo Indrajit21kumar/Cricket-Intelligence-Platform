@@ -13,6 +13,9 @@ from dataclasses import dataclass
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from ball_service.domain.artefact import ArtefactStore, FakeArtefactStore
+from ball_service.domain.bat_client import BatClient, FakeBatClient
+from ball_service.domain.clip import ClipLoader, FakeClipLoader
 from ball_service.domain.tracker import BallTracker, FakeBallTracker
 from ball_service.settings import ServiceSettings
 from cip_data import build_engine, build_session_factory
@@ -30,6 +33,12 @@ class Deps:
     idempotency_store: RedisIdempotencyStore
     #: Ball tracker (fake by default; a trained GPU-served model later).
     tracker: BallTracker
+    #: Normalised-clip loader (fake by default; real decode later).
+    clip_loader: ClipLoader
+    #: Ball-track artefact store (fake by default; real S3/MinIO later).
+    artefact_store: ArtefactStore
+    #: M07 bat reader, for contact detection (fake by default).
+    bat_client: BatClient
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -40,6 +49,9 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     await event_bus.start()
     idempotency_store = RedisIdempotencyStore(settings.redis_url)
     tracker: BallTracker = FakeBallTracker()
+    clip_loader: ClipLoader = FakeClipLoader()
+    artefact_store: ArtefactStore = FakeArtefactStore()
+    bat_client: BatClient = FakeBatClient()
     return Deps(
         settings=settings,
         engine=engine,
@@ -47,6 +59,9 @@ async def build_deps(settings: ServiceSettings) -> Deps:
         event_bus=event_bus,
         idempotency_store=idempotency_store,
         tracker=tracker,
+        clip_loader=clip_loader,
+        artefact_store=artefact_store,
+        bat_client=bat_client,
     )
 
 

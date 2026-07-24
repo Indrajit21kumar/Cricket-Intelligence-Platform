@@ -8,6 +8,7 @@ members = [
     "bat-service",
     "billing-service",
     "cip",
+    "cip-annotation",
     "cip-core",
     "cip-data",
     "cip-events",
@@ -202,6 +203,7 @@ name = "ball-service"
 version = "0.1.0"
 source = { editable = "services/ball-service" }
 dependencies = [
+    { name = "cip-annotation" },
     { name = "cip-core" },
     { name = "cip-data" },
     { name = "cip-events" },
@@ -212,6 +214,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cip-annotation", editable = "libs/cip-annotation" },
     { name = "cip-core", editable = "libs/cip-core" },
     { name = "cip-data", editable = "libs/cip-data" },
     { name = "cip-events", editable = "libs/cip-events" },
@@ -240,6 +243,7 @@ name = "bat-service"
 version = "0.1.0"
 source = { editable = "services/bat-service" }
 dependencies = [
+    { name = "cip-annotation" },
     { name = "cip-core" },
     { name = "cip-data" },
     { name = "cip-events" },
@@ -250,6 +254,7 @@ dependencies = [
 
 [package.metadata]
 requires-dist = [
+    { name = "cip-annotation", editable = "libs/cip-annotation" },
     { name = "cip-core", editable = "libs/cip-core" },
     { name = "cip-data", editable = "libs/cip-data" },
     { name = "cip-events", editable = "libs/cip-events" },
@@ -406,6 +411,23 @@ dev = [
     { name = "pytest-cov", specifier = ">=5.0" },
     { name = "ruff", specifier = ">=0.13" },
     { name = "schemathesis", specifier = ">=3.36" },
+]
+
+[[package]]
+name = "cip-annotation"
+version = "0.1.0"
+source = { editable = "libs/cip-annotation" }
+dependencies = [
+    { name = "cip-core" },
+    { name = "cip-data" },
+    { name = "sqlalchemy", extra = ["asyncio"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cip-core", editable = "libs/cip-core" },
+    { name = "cip-data", editable = "libs/cip-data" },
+    { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0" },
 ]
 
 [[package]]
