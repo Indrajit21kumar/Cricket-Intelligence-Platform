@@ -29,6 +29,7 @@ from bat_service import __version__
 from bat_service.deps import build_deps, shutdown_deps
 from bat_service.health import router as health_router
 from bat_service.health import version_router
+from bat_service.routes import bat_router, internal_router
 from bat_service.settings import get_service_settings
 
 
@@ -65,6 +66,8 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(version_router)
+    app.include_router(bat_router)
+    app.include_router(internal_router)
 
     return app
 

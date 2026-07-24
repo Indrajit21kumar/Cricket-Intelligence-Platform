@@ -24,6 +24,7 @@ from bat_service.domain.tracking import (
     ASSOCIATION_CONTINUITY,
     ASSOCIATION_HANDS,
     ASSOCIATION_NONE,
+    ASSOCIATION_SOLE,
     track_bat,
 )
 
@@ -142,17 +143,31 @@ class TestWithoutPose:
             FrameDetections(frame_index=0, bats=(_bat((0.0, 0.5)),)),
             FrameDetections(frame_index=1, bats=(_bat((0.03, 0.47)),)),
         ]
-        result = track_bat(detections, pose=None)
-        # Frame 0 has neither hands nor history, so it cannot be attributed.
-        assert result.associations[0] == ASSOCIATION_NONE
-        assert result.frames[0].detected is False
+        # No pose means no stance origin, but the clip's height still gives a
+        # scale — without it, CIP-unit thresholds would be compared against
+        # raw pixels. compute_bat_run supplies this fallback in production.
+        result = track_bat(detections, pose=None, cip_frame=FRAME)
+        # One bat, nothing to confuse it with: followed on the weakest basis,
+        # and the basis is visible to the caller.
+        assert result.associations[0] == ASSOCIATION_SOLE
+        assert result.frames[0].detected is True
+        assert result.frames_detected == 2
 
     def test_no_pose_with_two_bats_never_guesses(self) -> None:
+        """AC-M07-02 still binds: competing candidates are never picked blind."""
         detections = [
             FrameDetections(frame_index=0, bats=(_bat((0.0, 0.5)), _bat((0.6, 0.5)))),
         ]
-        result = track_bat(detections, pose=None)
+        result = track_bat(detections, pose=None, cip_frame=FRAME)
         assert result.frames_detected == 0
+        assert result.associations[0] == ASSOCIATION_NONE
+
+    def test_sole_candidate_never_overrides_a_hand_mismatch(self) -> None:
+        """With wrists present, a far-away lone bat is still refused."""
+        detections = [FrameDetections(frame_index=0, bats=(_bat((0.9, 0.5)),))]
+        result = track_bat(detections, pose=_pose(_hands_at(0, 0.0, 0.5)), cip_frame=FRAME)
+        assert result.frames[0].detected is False
+        assert result.associations[0] == ASSOCIATION_NONE
 
 
 class TestCoordinateFrame:

@@ -15,9 +15,18 @@ Selection, in order of preference:
    frame), stay with the bat nearest the previous frame's handle. A bat does
    not teleport between frames, so continuity is a real signal rather than a
    fallback guess.
-3. **Nothing.** If neither applies, the frame is undetected. M07 does not fall
-   back to "the most confident bat" — that is precisely how the net partner's
-   bat gets tracked, and a missing frame is honest where a wrong one is not.
+3. **Sole candidate.** With no wrists, no history, and exactly ONE bat in
+   frame, follow it — but record the weaker basis. There is no competing
+   candidate to get wrong here, and refusing outright would throw away every
+   clip where M06 could not track the body (M07 is meant to degrade, not fail,
+   when pose is unavailable).
+4. **Nothing.** With several candidates and nothing to choose between them,
+   the frame is undetected. M07 never falls back to "the most confident bat" —
+   that is precisely how the net partner's bat gets tracked for a whole clip,
+   and a missing frame is honest where a wrong one is not.
+
+``hand_associated_frames`` travels on ``bat.tracked`` so downstream can see how
+much of a track rests on the strong signal versus the weak ones.
 
 All distances are in CIP units (fractions of frame height), so thresholds mean
 the same thing at any resolution.
@@ -50,6 +59,9 @@ MAX_CONTINUITY_DISTANCE = 0.35
 # tracked mostly by continuity is weaker evidence than one tracked by hands.
 ASSOCIATION_HANDS = "hands"
 ASSOCIATION_CONTINUITY = "continuity"
+#: Only one bat in frame and nothing to verify it against — followed, but the
+#: weakest basis, and never used when candidates compete.
+ASSOCIATION_SOLE = "sole_candidate"
 ASSOCIATION_NONE = "none"
 
 
@@ -148,6 +160,21 @@ def track_bat(
                     best = (distance, candidate)
             if best is not None and best[0] <= MAX_CONTINUITY_DISTANCE:
                 chosen, method = best[1], ASSOCIATION_CONTINUITY
+
+        if (
+            chosen is None
+            # Only when there was NO evidence to test against. If wrists were
+            # known, or a previous handle existed, then failing those checks is
+            # a decision rather than a gap — a bat nobody is holding, or one
+            # that teleported across the frame, stays rejected.
+            and hands is None
+            and previous_handle is None
+            and len(candidates) == 1
+            and _handle_position(candidates[0]) is not None
+        ):
+            # Nothing to check it against, but nothing to confuse it with
+            # either. Followed on the weakest basis, which the caller can see.
+            chosen, method = candidates[0], ASSOCIATION_SOLE
 
         if chosen is None:
             # Deliberately NOT "take the most confident bat" — that is how the

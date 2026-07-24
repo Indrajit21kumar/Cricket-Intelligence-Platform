@@ -102,31 +102,37 @@ def parse_pose_artefact(payload: str) -> PoseTrack:
 
 
 class PoseClient(Protocol):
-    """Fetches the M06 pose track for a clip."""
+    """Fetches the M06 pose track for a clip.
 
-    async def load(self, artefact_ref: str) -> PoseTrack | None:
-        """Return the pose track, or None when M06 produced no usable run."""
+    Keyed on correlation_id, not on an artefact ref, because that is what M07
+    has: ``video.normalized`` triggers the run and carries the correlation,
+    while the pose artefact's location is M06's business. A real client
+    resolves it (GET /v1/pose/{correlationId}, then fetch the artefact).
+    """
+
+    async def load(self, correlation_id: str) -> PoseTrack | None:
+        """Return the pose track, or None when M06 has no usable run for it."""
         ...
 
 
 class FakePoseClient:
     """In-process pose client for dev + tests.
 
-    ``set_payload`` accepts a real M06 artefact string, so the association
-    tests exercise the actual published format rather than a convenient
-    parallel structure that could drift from it.
+    ``set_payload`` accepts a real M06 artefact string, so tests exercise the
+    actual published format rather than a convenient parallel structure that
+    could drift from it.
     """
 
     def __init__(self) -> None:
         self.payloads: dict[str, str] = {}
-        #: When True, behaves as if M06 produced nothing for the clip.
+        #: When True, behaves as if M06 produced nothing for any clip.
         self.missing = False
 
-    def set_payload(self, artefact_ref: str, payload: str) -> None:
-        self.payloads[artefact_ref] = payload
+    def set_payload(self, correlation_id: str, payload: str) -> None:
+        self.payloads[correlation_id] = payload
 
-    async def load(self, artefact_ref: str) -> PoseTrack | None:
+    async def load(self, correlation_id: str) -> PoseTrack | None:
         if self.missing:
             return None
-        payload = self.payloads.get(artefact_ref)
+        payload = self.payloads.get(correlation_id)
         return parse_pose_artefact(payload) if payload else None
