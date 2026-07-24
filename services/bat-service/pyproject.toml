@@ -1,0 +1,21 @@
+[project]
+name = "bat-service"
+version = "0.1.0"
+description = "M07 Bat Detection — locates and tracks the bat, derives bat angle and swing plane."
+requires-python = ">=3.12,<3.13"
+readme = "README.md"
+dependencies = [
+    "cip-core",
+    "cip-observability",
+    "cip-data",
+    "cip-events",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/bat_service"]

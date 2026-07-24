@@ -81,6 +81,7 @@ known-first-party = [
     "profile_service",
     "video_service",
     "pose_service",
+    "bat_service",
 ]
 
 [tool.ruff.format]
