@@ -149,5 +149,11 @@ class TestPublish:
                 "/raw/", "/normalized/"
             )
             assert env.payload["depth_estimated"] is True
+            # fps + frame_count ship with the clip: the vision stack cannot
+            # re-derive them from the reference, and M08 needs fps to turn a
+            # displacement into a speed at all.
+            assert env.payload["fps"] > 0
+            assert env.payload["frame_count"] > 0
+            assert env.schema_version == "1.1.0"
         finally:
             await bus.stop()

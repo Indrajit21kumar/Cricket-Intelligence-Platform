@@ -263,13 +263,19 @@ async def complete_upload(
     # Publish the normalised clip + calibration + soft flags for M06-M09.
     envelope = EventEnvelope(
         correlation_id=outcome.correlation_id,
+        # 1.1.0 adds fps + frame_count. Consumers cannot re-derive them from
+        # the clip reference alone, and M08 needs fps for both its
+        # capture-condition gate and its speed estimate (FR-M08-01/04) — a
+        # displacement without a frame interval is not a speed.
+        schema_version="1.1.0",
         tenant_id=tenant_id,
-        schema_version="1.0.0",
         idempotency_key=f"video.normalized:{outcome.ingestion_id}",
         payload={
             "ingestion_id": str(outcome.ingestion_id),
             "person_id": str(outcome.person_id),
             "normalized_ref": outcome.normalized_ref,
+            "fps": outcome.fps,
+            "frame_count": outcome.frame_count,
             "camera_angle": outcome.camera_angle,
             "pixel_to_meter": outcome.pixel_to_meter,
             "spatial_confidence": outcome.spatial_confidence,
