@@ -70,6 +70,7 @@ jobs:
         run: |
           uv run pytest services/pose-service/tests/test_validation.py -q
           uv run pytest services/bat-service/tests/test_validation.py -q
+          uv run pytest services/ball-service/tests/test_validation.py -q
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
