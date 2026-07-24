@@ -62,12 +62,14 @@ jobs:
       - run: uv sync --frozen --all-packages
       - name: pytest (unit only)
         run: uv run pytest -m "not integration and not contract" --cov --cov-report=xml
-      # Release gate (ENG-007, AC-M06-06): a pose model whose keypoint accuracy
-      # regresses beyond tolerance against the golden dataset must not ship.
-      # Run as its own step so the failure names the cause instead of hiding in
-      # the suite — a red gate here blocks the merge that bumps the model.
-      - name: Model validation gate (ENG-007)
-        run: uv run pytest services/pose-service/tests/test_validation.py -q
+      # Release gates (ENG-007, AC-M06-06 / AC-M07-06): a vision model whose
+      # accuracy regresses beyond tolerance against its golden dataset must not
+      # ship. Run as their own step so a failure names the cause instead of
+      # hiding in the suite — red here blocks the merge that bumps the model.
+      - name: Model validation gates (ENG-007)
+        run: |
+          uv run pytest services/pose-service/tests/test_validation.py -q
+          uv run pytest services/bat-service/tests/test_validation.py -q
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4
