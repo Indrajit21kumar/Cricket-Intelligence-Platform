@@ -140,6 +140,7 @@ class TestCompute:
         run = r.json()
         assert run["subject_status"] == "multi_subject_ambiguous"
         assert run["quality"] == "rejected"
+        assert run["rejection_code"] == "MULTI_SUBJECT_AMBIGUOUS"
         assert run["artefact_ref"] is None  # nothing guessed, nothing stored
         assert run["mean_confidence"] is None
 
@@ -248,6 +249,7 @@ class TestPublish:
             assert env.tenant_id == tenant_id
             assert env.payload["artefact_ref"] == r.json()["artefact_ref"]
             assert env.payload["quality"] == "ok"
+            assert env.payload["rejection_code"] is None
             assert env.payload["subject_status"] == "tracked"
             assert env.payload["frame_count"] == 30
             assert env.payload["model_version"] == "fake-pose-v1"

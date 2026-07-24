@@ -26,6 +26,7 @@ from cip_events import EventBus, EventEnvelope, IdempotencyStore, IdempotentCons
 from pose_service.deps import Deps
 from pose_service.domain.artefact import ArtefactStore, artefact_key, serialise_frames
 from pose_service.domain.clip import ClipLoader
+from pose_service.domain.keypoints import QUALITY_REJECTED
 from pose_service.domain.model import PoseModel
 from pose_service.domain.pipeline import compute_pose_run
 from pose_service.domain.pose_runs import upsert_pose_run
@@ -84,7 +85,10 @@ async def process_normalized(
         )
 
     # Publish for M09/M10 — even a rejection is announced (quality tells them),
-    # propagating M05's calibration + quality context (FR-M06-08).
+    # propagating M05's calibration + quality context (FR-M06-08). A rejected
+    # run also carries the reason as an upper-case code (AC-M06-02) so a
+    # consumer can branch on it without parsing the status string.
+    rejection_code = result.subject_status.upper() if result.quality == QUALITY_REJECTED else None
     envelope = EventEnvelope(
         correlation_id=correlation_id,
         tenant_id=tenant_id,
@@ -99,6 +103,7 @@ async def process_normalized(
             "mean_confidence": result.mean_confidence if result.frames else None,
             "subject_status": result.subject_status,
             "quality": result.quality,
+            "rejection_code": rejection_code,
             "depth_estimated": result.depth_estimated,
             "camera_angle": camera_angle,
             "spatial_confidence": spatial_confidence,

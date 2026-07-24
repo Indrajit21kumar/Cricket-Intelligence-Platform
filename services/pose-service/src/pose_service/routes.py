@@ -29,6 +29,7 @@ from cip_core import (
 )
 from cip_data import tenant_session
 from pose_service.deps import Deps, get_deps
+from pose_service.domain.keypoints import QUALITY_REJECTED
 from pose_service.domain.pose_runs import get_pose_run
 from pose_service.service import process_normalized
 
@@ -62,6 +63,8 @@ class PoseRunResponse(BaseModel):
     subject_status: str
     #: ok | provisional | rejected
     quality: str
+    #: Why a rejected run was rejected, e.g. MULTI_SUBJECT_AMBIGUOUS. None otherwise.
+    rejection_code: str | None
     #: Object-storage ref for the keypoint sequence; None when rejected.
     artefact_ref: str | None
     #: True when Z was inferred from a single camera (monocular depth).
@@ -70,6 +73,7 @@ class PoseRunResponse(BaseModel):
 
 
 def _to_response(row: dict[str, Any]) -> PoseRunResponse:
+    rejected = row["quality"] == QUALITY_REJECTED
     return PoseRunResponse(
         correlation_id=row["correlation_id"],
         person_id=row["person_id"],
@@ -78,6 +82,7 @@ def _to_response(row: dict[str, Any]) -> PoseRunResponse:
         mean_confidence=row["mean_confidence"],
         subject_status=row["subject_status"],
         quality=row["quality"],
+        rejection_code=str(row["subject_status"]).upper() if rejected else None,
         artefact_ref=row["artefact_ref"],
         depth_estimated=row["depth_estimated"],
         created_at=row["created_at"],
