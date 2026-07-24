@@ -3,9 +3,10 @@
 Covers:
 - AC-M06-01 clean side-on clip -> keypoints for every frame, per-joint confidence
 - AC-M06-02 two comparable people -> rejected, no guessed subject
+- AC-M06-03 2D keypoints always present; depth carries depth_estimated
 - AC-M06-04 low-confidence clip -> provisional, never silently downgraded
-- AC-M06-05 re-delivered clip -> one pose_run, one artefact (idempotent)
-- AC-M06-06 pose.keypoints published with artefact ref + summary + quality
+- AC-M06-05 pose.keypoints published with schema + quality summary +
+  correlation_id, and re-delivery is idempotent
 """
 
 from __future__ import annotations
@@ -120,7 +121,9 @@ class TestCompute:
             assert len(frame) == 17  # canonical joint set
             for kp in frame:
                 assert 0.0 <= kp["confidence"] <= 1.0
+                # AC-M06-03: 2D is always there; z only appears with its flag.
                 assert "x" in kp and "y" in kp
+                assert "z" not in kp or kp["depth_estimated"] is True
 
     async def test_multi_subject_clip_is_rejected(
         self, app_client: tuple[FastAPI, httpx.AsyncClient], tenant_id: uuid.UUID
@@ -221,7 +224,7 @@ class TestPublish:
     async def test_pose_keypoints_is_published(
         self, app_client: tuple[FastAPI, httpx.AsyncClient], tenant_id: uuid.UUID
     ) -> None:
-        """AC-M06-06: artefact ref + summary + quality, with M05 context carried."""
+        """AC-M06-05: artefact ref + summary + quality, with M05 context carried."""
         _app, client = app_client
         bus = KafkaEventBus(os.environ.get("CIP_KAFKA_BOOTSTRAP", DEFAULT_BOOTSTRAP))
         await bus.start()
