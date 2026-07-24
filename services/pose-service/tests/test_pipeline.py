@@ -25,6 +25,14 @@ class TestHappyPath:
         # Per-frame keypoints are the full canonical set, in the CIP frame.
         assert [k.joint for k in result.frames[0]] == list(CANONICAL_JOINTS)
         assert result.mean_confidence > 0.5
+        # Monocular by default — the capture decides this, not the pose stage.
+        assert result.depth_estimated is True
+
+    def test_depth_flag_is_carried_from_the_capture(self) -> None:
+        """A true multi-camera capture is not relabelled as estimated."""
+        result = compute_pose_run(
+            FakePoseModel(), frame_count=8, width=1920, height=1080, depth_estimated=False
+        )
         assert result.depth_estimated is False
 
 

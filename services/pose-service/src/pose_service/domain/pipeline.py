@@ -36,9 +36,20 @@ class PoseRunResult:
 
 
 def compute_pose_run(
-    model: PoseModel, *, frame_count: int, width: int, height: int
+    model: PoseModel,
+    *,
+    frame_count: int,
+    width: int,
+    height: int,
+    depth_estimated: bool = True,
 ) -> PoseRunResult:
-    """Run the full pose pipeline over a clip's frame geometry."""
+    """Run the full pose pipeline over a clip's frame geometry.
+
+    ``depth_estimated`` is a property of the *capture*, not of this stage —
+    M05 knows whether the clip was monocular and says so on
+    ``video.normalized``; M06 carries that truth through rather than
+    re-deciding it (Book 4 Ch. 2).
+    """
     detections = model.infer(frame_count=frame_count, width=width, height=height)
     tracking = select_primary_subject(detections, width=float(width))
 
@@ -51,10 +62,10 @@ def compute_pose_run(
             frames=(),
             mean_confidence=0.0,
             quality=resolve_quality(subject_status=tracking.subject_status, provisional=True),
-            depth_estimated=False,
+            depth_estimated=depth_estimated,
         )
 
-    normalised = normalise(tracking.frames, frame_height=height)
+    normalised = normalise(tracking.frames, frame_height=height, depth_estimated=depth_estimated)
     conf = aggregate_confidence(normalised.frames)
     quality = resolve_quality(subject_status=tracking.subject_status, provisional=conf.provisional)
     return PoseRunResult(

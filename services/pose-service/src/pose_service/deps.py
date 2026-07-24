@@ -15,6 +15,9 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
+from pose_service.domain.artefact import ArtefactStore, FakeArtefactStore
+from pose_service.domain.clip import ClipLoader, FakeClipLoader
+from pose_service.domain.model import FakePoseModel, PoseModel
 from pose_service.settings import ServiceSettings
 
 
@@ -27,6 +30,12 @@ class Deps:
     session_factory: async_sessionmaker[AsyncSession]
     event_bus: KafkaEventBus
     idempotency_store: RedisIdempotencyStore
+    #: Pose-estimation model (fake by default; real GPU-served model later).
+    model: PoseModel
+    #: Normalised-clip loader (fake by default; real decode-from-storage later).
+    clip_loader: ClipLoader
+    #: Keypoint-artefact store (fake by default; real S3/MinIO later).
+    artefact_store: ArtefactStore
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -36,12 +45,18 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     event_bus = KafkaEventBus(bootstrap_servers=settings.kafka_bootstrap)
     await event_bus.start()
     idempotency_store = RedisIdempotencyStore(settings.redis_url)
+    model: PoseModel = FakePoseModel()
+    clip_loader: ClipLoader = FakeClipLoader()
+    artefact_store: ArtefactStore = FakeArtefactStore()
     return Deps(
         settings=settings,
         engine=engine,
         session_factory=session_factory,
         event_bus=event_bus,
         idempotency_store=idempotency_store,
+        model=model,
+        clip_loader=clip_loader,
+        artefact_store=artefact_store,
     )
 
 

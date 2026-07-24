@@ -51,21 +51,34 @@ class FakePoseModel:
     low-confidence (Step 5) tests hang off.
     """
 
-    def __init__(self, *, persons: int = 1, base_confidence: float = 0.9) -> None:
+    def __init__(
+        self, *, persons: int = 1, base_confidence: float = 0.9, comparable: bool = False
+    ) -> None:
         self._version = MODEL_VERSION
         self.persons = persons
         self.base_confidence = base_confidence
+        #: When True, extra people are the same size as person 0 — the
+        #: "two batters in the net" case tracking must refuse to guess at.
+        self.comparable = comparable
 
     @property
     def version(self) -> str:
         return self._version
 
-    def patch(self, *, persons: int | None = None, base_confidence: float | None = None) -> None:
+    def patch(
+        self,
+        *,
+        persons: int | None = None,
+        base_confidence: float | None = None,
+        comparable: bool | None = None,
+    ) -> None:
         """One-shot test override for the next infer()."""
         if persons is not None:
             self.persons = persons
         if base_confidence is not None:
             self.base_confidence = base_confidence
+        if comparable is not None:
+            self.comparable = comparable
 
     def infer(self, *, frame_count: int, width: int, height: int) -> list[FrameDetections]:
         frames: list[FrameDetections] = []
@@ -74,12 +87,25 @@ class FakePoseModel:
             persons: list[PersonDetection] = []
             for p in range(self.persons):
                 # Person 0 is the batter: centred, large. Extra people are off to
-                # the side and smaller (so tracking prefers the central/largest).
-                cx = width * (0.5 if p == 0 else (0.15 + 0.7 * p))
+                # the side and smaller, so tracking prefers the central/largest.
+                # Under ``comparable`` they stand alongside the batter at the
+                # same size — two players sharing a net, which no heuristic can
+                # honestly separate.
+                if self.comparable:
+                    cx = width * (0.5 + 0.12 * p)
+                    scale = 0.42 * height
+                else:
+                    cx = width * (0.5 if p == 0 else (0.15 + 0.7 * p))
+                    scale = (0.42 if p == 0 else 0.28) * height
                 cy = height * 0.55
-                scale = (0.42 if p == 0 else 0.28) * height
                 persons.append(
-                    self._person(cx=cx, cy=cy, scale=scale, phase=phase, primary=(p == 0))
+                    self._person(
+                        cx=cx,
+                        cy=cy,
+                        scale=scale,
+                        phase=phase,
+                        primary=(p == 0 or self.comparable),
+                    )
                 )
             frames.append(FrameDetections(frame_index=f, persons=tuple(persons)))
         return frames

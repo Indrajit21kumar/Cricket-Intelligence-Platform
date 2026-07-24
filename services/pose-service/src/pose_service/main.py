@@ -29,7 +29,7 @@ from pose_service import __version__
 from pose_service.deps import build_deps, shutdown_deps
 from pose_service.health import router as health_router
 from pose_service.health import version_router
-from pose_service.routes import router as demo_router
+from pose_service.routes import internal_router, pose_router
 from pose_service.settings import get_service_settings
 
 
@@ -52,9 +52,9 @@ def create_app() -> FastAPI:
         title="CIP pose-service",
         version=__version__,
         description=(
-            "Template service. Wires cip-core middleware, cip-observability "
-            "(logs + traces + metrics), cip-data (async SQLAlchemy + RLS), "
-            "and cip-events (Kafka-wire pub/sub + idempotent consumer)."
+            "M06 Pose Engine. Consumes video.normalized, runs pose estimation "
+            "over the clip, tracks the primary subject, normalises to the CIP "
+            "coordinate frame, and publishes pose.keypoints."
         ),
         lifespan=lifespan,
     )
@@ -66,7 +66,8 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(version_router)
-    app.include_router(demo_router)
+    app.include_router(pose_router)
+    app.include_router(internal_router)
 
     return app
 

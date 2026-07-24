@@ -10,15 +10,31 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import AsyncIterator
+from pathlib import Path
 
 import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
 
+from cip_core.settings import get_settings
 from cip_data.engine import admin_session, build_engine, build_session_factory
 from cip_data.migrations import upgrade_head
 from pose_service.main import create_app
+
+TEST_JWT_SECRET = "test-jwt-signing-key-do-not-use-in-any-real-environment-42"
+
+REPO_ROOT = Path(__file__).resolve().parents[3]
+BASE_MIGRATIONS = REPO_ROOT / "migrations" / "base"
+POSE_MIGRATIONS = REPO_ROOT / "services" / "pose-service" / "migrations"
+
+
+@pytest.fixture(autouse=True)
+def _pin_jwt_secret(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deterministic JWT signing key so hand-crafted access tokens verify."""
+    monkeypatch.setenv("CIP_JWT_SIGNING_KEY", TEST_JWT_SECRET)
+    monkeypatch.setenv("CIP_SECRET_PROVIDER", "env")
+    get_settings.cache_clear()
 
 
 def _database_url() -> str:
@@ -27,14 +43,15 @@ def _database_url() -> str:
 
 @pytest.fixture(scope="session")
 def _migrated_database() -> str:
-    """Apply the base migration once for the whole session.
+    """Apply base + pose migrations once for the session (idempotent).
 
     Sync fixture — must NOT be async, because ``upgrade_head`` uses
     ``asyncio.run`` internally and would collide with the pytest-asyncio
     event loop if called from an async fixture.
     """
     url = _database_url()
-    upgrade_head(url)
+    upgrade_head(url, migrations_dir=BASE_MIGRATIONS)
+    upgrade_head(url, migrations_dir=POSE_MIGRATIONS)
     return url
 
 
