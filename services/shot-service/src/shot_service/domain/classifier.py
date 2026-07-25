@@ -54,6 +54,13 @@ DATASET_VERSION: str | None = None
 NO_BAT_PENALTY = 0.75
 NO_BALL_PENALTY = 0.9
 
+#: Softmax temperature. Rule scores are close together across 11 classes, so
+#: an un-sharpened distribution leaves even a clear winner near 1/11 and
+#: everything abstains. Sharpening turns a decisive rule margin into decisive
+#: confidence, while a genuine near-tie still lands low — which is the whole
+#: point of returning a distribution the abstention step can read.
+SHARPNESS = 1.9
+
 
 class ShotClassifier(Protocol):
     """Adapter every shot classifier (trained model or fake) satisfies."""
@@ -74,11 +81,11 @@ class ShotClassifier(Protocol):
 
 
 def _softmax(raw: dict[str, float]) -> list[ClassScore]:
-    """Turn rule scores into a normalised distribution."""
+    """Turn rule scores into a normalised, sharpened distribution."""
     if not raw:
         return []
     top = max(raw.values())
-    exps = {k: math.exp(v - top) for k, v in raw.items()}
+    exps = {k: math.exp(SHARPNESS * (v - top)) for k, v in raw.items()}
     total = sum(exps.values())
     return [ClassScore(shot_class=k, score=v / total) for k, v in exps.items()]
 
@@ -124,43 +131,53 @@ class FakeShotClassifier:
         )
 
     def _score(self, f: ShotFeatures) -> dict[str, float]:
-        """Transparent geometric affinities per class."""
+        """Transparent geometric affinities per class.
+
+        The DISCRIMINATING feature of each shot carries a large multiplier, so a
+        stroke that clearly belongs to one class wins decisively — while a
+        stroke that sits between classes (e.g. a drive with no lateral component,
+        which cover/straight/on all fit equally) leaves them tied and the
+        abstention step catches the ambiguity. That is the behaviour a
+        calibrated classifier has, and the property Step 6's confusion gate and
+        Step 3's abstention both depend on.
+        """
         incl = f.swing_plane_inclination
         vertical_bat = incl is not None and incl < 35.0
         horizontal_bat = incl is not None and incl > 60.0
 
         raw: dict[str, float] = {}
 
-        # Vertical-ish swing, front foot forward, ball driven: the drives.
+        # Vertical-ish swing, front foot forward: the drives, separated by the
+        # lateral direction of the hands (off side / straight / on side).
         drive_base = 2.0 + max(f.footedness, 0.0) * 1.5
         if vertical_bat:
             drive_base += 1.0
+        lateral = f.wrist_lateral_travel
         raw[STRAIGHT_DRIVE] = drive_base
-        raw[COVER_DRIVE] = drive_base + max(f.wrist_lateral_travel, 0.0) * 2.0
-        raw[ON_DRIVE] = drive_base + max(-f.wrist_lateral_travel, 0.0) * 2.0
-
-        # Front foot, worked to the on side off the hip: the flick.
-        raw[FLICK] = drive_base + max(-f.wrist_lateral_travel, 0.0) * 1.2 - 0.5
+        raw[COVER_DRIVE] = drive_base + max(lateral, 0.0) * 5.0
+        raw[ON_DRIVE] = drive_base + max(-lateral, 0.0) * 5.0
+        raw[FLICK] = drive_base + max(-lateral, 0.0) * 3.5 - 0.5
 
         # Horizontal-bat, back foot, higher contact: the cross-bat shots.
         cross_base = 2.0 + max(-f.footedness, 0.0) * 1.5
         if horizontal_bat:
-            cross_base += 1.0
-        raw[PULL] = cross_base + max(f.contact_height, 0.0) * 1.5
-        raw[HOOK] = cross_base + max(f.contact_height - 0.3, 0.0) * 3.0
-        raw[CUT] = cross_base + max(f.wrist_lateral_travel, 0.0) * 1.5
+            cross_base += 1.5
+        raw[PULL] = cross_base + max(f.contact_height, 0.0) * 4.0
+        # Hook is a pull to a higher ball, so only very high contact separates it.
+        raw[HOOK] = cross_base + max(f.contact_height - 0.35, 0.0) * 7.0
+        raw[CUT] = cross_base + max(lateral, 0.0) * 3.5
 
         # Low contact + horizontal bat: the sweeps.
-        sweep_base = 1.5 + max(-f.contact_height, 0.0) * 2.5
+        sweep_base = 1.5 + max(-f.contact_height, 0.0) * 5.0
         raw[SWEEP] = sweep_base
-        raw[REVERSE_SWEEP] = sweep_base + max(f.wrist_lateral_travel, 0.0) * 1.0
+        raw[REVERSE_SWEEP] = sweep_base + max(lateral, 0.0) * 2.0 - 0.3
 
-        # High wrist peak: lofted.
-        raw[LOFTED] = 1.5 + max(f.wrist_peak_height - 0.4, 0.0) * 4.0
+        # Genuinely high hands: lofted.
+        raw[LOFTED] = 1.0 + max(f.wrist_peak_height - 0.55, 0.0) * 8.0
 
         # Little travel, little rotation: defensive.
-        stillness = max(0.0, 1.0 - f.wrist_lateral_travel - f.shoulder_rotation / 90.0)
-        raw[DEFENSIVE] = 1.5 + stillness * 2.5
+        stillness = max(0.0, 1.0 - f.wrist_lateral_travel * 3.0 - f.shoulder_rotation / 60.0)
+        raw[DEFENSIVE] = 1.5 + stillness * 3.5
 
         # Every class carries some mass so the distribution spans the whole
         # taxonomy — the confusion gate (Step 6) needs every class represented.

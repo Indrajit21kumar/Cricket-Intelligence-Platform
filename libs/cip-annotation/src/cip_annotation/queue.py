@@ -39,12 +39,17 @@ from cip_core import may_use_for_training
 #: What kind of thing a queued frame is labelled for.
 MODALITY_BAT = "bat"
 MODALITY_BALL = "ball"
+#: A whole-stroke shot label, not a per-frame geometry — the item is still a
+#: frame range keyed by correlation_id, but the labeller assigns a shot class.
+MODALITY_SHOT = "shot"
 
 # Why a frame was selected. Shared vocabulary so the queue is queryable across
 # modalities ("show me everything the models were unsure about").
 REASON_FAILED = "failed"
 REASON_LOW_CONFIDENCE = "low_confidence"
 REASON_SAMPLED = "sampled"
+#: The model abstained — a near-miss a human should disambiguate.
+REASON_ABSTAINED = "abstained"
 
 
 @dataclass(frozen=True, slots=True)

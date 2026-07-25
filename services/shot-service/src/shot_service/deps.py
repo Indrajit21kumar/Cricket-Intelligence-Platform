@@ -16,6 +16,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
 from shot_service.domain.classifier import FakeShotClassifier, ShotClassifier
+from shot_service.domain.sources import (
+    BallSource,
+    BatSource,
+    FakeBallSource,
+    FakeBatSource,
+    FakePoseSource,
+    PoseSource,
+)
 from shot_service.settings import ServiceSettings
 
 
@@ -30,6 +38,10 @@ class Deps:
     idempotency_store: RedisIdempotencyStore
     #: Shot classifier (fake by default; a trained model later).
     classifier: ShotClassifier
+    #: Upstream signal readers (fake by default; real HTTP/DB fetch later).
+    pose_source: PoseSource
+    bat_source: BatSource
+    ball_source: BallSource
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -40,6 +52,9 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     await event_bus.start()
     idempotency_store = RedisIdempotencyStore(settings.redis_url)
     classifier: ShotClassifier = FakeShotClassifier()
+    pose_source: PoseSource = FakePoseSource()
+    bat_source: BatSource = FakeBatSource()
+    ball_source: BallSource = FakeBallSource()
     return Deps(
         settings=settings,
         engine=engine,
@@ -47,6 +62,9 @@ async def build_deps(settings: ServiceSettings) -> Deps:
         event_bus=event_bus,
         idempotency_store=idempotency_store,
         classifier=classifier,
+        pose_source=pose_source,
+        bat_source=bat_source,
+        ball_source=ball_source,
     )
 
 

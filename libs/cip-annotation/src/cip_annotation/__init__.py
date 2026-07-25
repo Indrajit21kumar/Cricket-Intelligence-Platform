@@ -16,6 +16,8 @@ from cip_annotation.dataset import (
 from cip_annotation.queue import (
     MODALITY_BALL,
     MODALITY_BAT,
+    MODALITY_SHOT,
+    REASON_ABSTAINED,
     REASON_FAILED,
     REASON_LOW_CONFIDENCE,
     REASON_SAMPLED,
@@ -31,6 +33,8 @@ __version__ = "0.1.0"
 __all__ = [
     "MODALITY_BALL",
     "MODALITY_BAT",
+    "MODALITY_SHOT",
+    "REASON_ABSTAINED",
     "REASON_FAILED",
     "REASON_LOW_CONFIDENCE",
     "REASON_SAMPLED",
