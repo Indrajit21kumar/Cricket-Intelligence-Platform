@@ -175,8 +175,9 @@ class FakeShotClassifier:
         # Genuinely high hands: lofted.
         raw[LOFTED] = 1.0 + max(f.wrist_peak_height - 0.55, 0.0) * 8.0
 
-        # Little travel, little rotation: defensive.
-        stillness = max(0.0, 1.0 - f.wrist_lateral_travel * 3.0 - f.shoulder_rotation / 60.0)
+        # Little travel, little rotation: defensive. abs() because lateral
+        # travel is signed (side), and stillness cares only about magnitude.
+        stillness = max(0.0, 1.0 - abs(lateral) * 3.0 - f.shoulder_rotation / 60.0)
         raw[DEFENSIVE] = 1.5 + stillness * 3.5
 
         # Every class carries some mass so the distribution spans the whole

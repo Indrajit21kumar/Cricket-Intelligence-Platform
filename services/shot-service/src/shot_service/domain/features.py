@@ -33,7 +33,10 @@ class ShotFeatures:
     #: Peak wrist height above the stance, in CIP units — high for a lofted
     #: shot, low for a sweep.
     wrist_peak_height: float = 0.0
-    #: Horizontal wrist travel across the stroke (across-body reach).
+    #: SIGNED lateral displacement of the hands from stance to impact, in CIP
+    #: units. Positive = toward the off side (cover / cut), negative = toward
+    #: the on side (on drive / flick). Signed, not a magnitude, because the
+    #: SIDE is what distinguishes those shots.
     wrist_lateral_travel: float = 0.0
     #: Shoulder rotation range across the stroke, degrees.
     shoulder_rotation: float = 0.0

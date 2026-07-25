@@ -82,14 +82,18 @@ def build_features(
     signals: list[str] = [SIGNAL_POSE]
 
     hand_points = [h for f in pose.frames if (h := _hands(f)) is not None]
-    hand_xs = [h[0] for h in hand_points]
     hand_ys = [h[1] for h in hand_points]
 
     wrist_peak_height = max(hand_ys) if hand_ys else 0.0
-    wrist_lateral_travel = (max(hand_xs) - min(hand_xs)) if hand_xs else 0.0
 
     angles = [a for f in pose.frames if (a := _shoulder_angle(f)) is not None]
     shoulder_rotation = (max(angles) - min(angles)) if angles else 0.0
+
+    # SIGNED lateral displacement across the stroke (end minus start): which
+    # SIDE the hands finished, since that is what tells a cover drive from an
+    # on drive. Net, not peak-speed-relative, so it is robust to where the
+    # fastest frame happens to fall.
+    wrist_lateral_travel = (hand_points[-1][0] - hand_points[0][0]) if hand_points else 0.0
 
     swing = pose.frames[_swing_frame_index(pose)] if pose.frames else None
     contact_height = 0.0
