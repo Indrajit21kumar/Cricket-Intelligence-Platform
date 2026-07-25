@@ -85,6 +85,7 @@ known-first-party = [
     "pose_service",
     "bat_service",
     "ball_service",
+    "shot_service",
 ]
 
 [tool.ruff.format]

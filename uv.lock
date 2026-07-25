@@ -17,6 +17,7 @@ members = [
     "pose-service",
     "profile-service",
     "reference-service",
+    "shot-service",
     "video-service",
 ]
 
@@ -1839,6 +1840,31 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/ea/1d/bbbc61034010b55e34a996c60afdc2cec6ff504628668a1cd7967cad5e68/schemathesis-4.24.0.tar.gz", hash = "sha256:046eb010574eef5c36e65246d54665631b1243d6a8c53dfa825f1bc9fcdbb394", size = 2429072, upload-time = "2026-07-19T16:09:55.271Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/14/d6/d2193b3dd1fb2f2211426e42010eb7f5873a68262ed756c65214316c985e/schemathesis-4.24.0-py3-none-any.whl", hash = "sha256:458ae97a2958d53661f7db25d9416e9c49997f15ff64bc44a984c64f0c5a14cf", size = 832627, upload-time = "2026-07-19T16:09:53.56Z" },
+]
+
+[[package]]
+name = "shot-service"
+version = "0.1.0"
+source = { editable = "services/shot-service" }
+dependencies = [
+    { name = "cip-annotation" },
+    { name = "cip-core" },
+    { name = "cip-data" },
+    { name = "cip-events" },
+    { name = "cip-observability" },
+    { name = "fastapi" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cip-annotation", editable = "libs/cip-annotation" },
+    { name = "cip-core", editable = "libs/cip-core" },
+    { name = "cip-data", editable = "libs/cip-data" },
+    { name = "cip-events", editable = "libs/cip-events" },
+    { name = "cip-observability", editable = "libs/cip-observability" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
 
 [[package]]
