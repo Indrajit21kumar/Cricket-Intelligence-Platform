@@ -1,4 +1,4 @@
-"""The CIP-STD metric catalogue — the vocabulary M10 speaks (M10 §7, Book 4 Ch. 3).
+"""The CIP-STD metric catalogue - the vocabulary M10 speaks (M10 §7, Book 4 Ch. 3).
 
 Seventeen canonical biomechanical measures, each with a stable ID, a unit, and a
 *metric class* that fixes its accuracy tolerance band (M10 §10). The class is
@@ -41,7 +41,7 @@ class MetricDef:
     #: review, never rejected (Step 6). None where a hard range is ill-defined.
     expected_range: tuple[float, float] | None = None
     #: True when the value depends on the X (across-crease) axis, which a
-    #: non-side-on camera cannot resolve — disabled at low spatial confidence.
+    #: non-side-on camera cannot resolve - disabled at low spatial confidence.
     x_axis_dependent: bool = False
     #: True when the value needs the bat (M07); provisional on bat loss.
     bat_dependent: bool = False

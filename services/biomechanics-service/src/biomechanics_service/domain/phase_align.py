@@ -1,7 +1,7 @@
 """Phase alignment against M09's boundaries (M10 Step 3, FR-M10-03).
 
-Every phase-relative BM metric — backlift peak, downswing bat path, impact
-frame, follow-through end — needs the right frame window, and those windows
+Every phase-relative BM metric - backlift peak, downswing bat path, impact
+frame, follow-through end - needs the right frame window, and those windows
 come from M09, not from M10 re-deriving them. This module turns M09's five
 boundary frames into windows the formulas slice against, and carries the
 ``phase_method`` through so the report records whether the timing rests on ball
@@ -11,7 +11,7 @@ The one judgement here is what to do with degenerate boundaries. M09 can emit a
 collapsed segmentation (all boundaries equal) for a stroke it could barely see.
 Rather than let a formula index an empty or inverted window, the aligner clamps
 each window to a valid, non-decreasing frame range within the clip and reports
-whether the phases were usable — so a degenerate stroke produces empty windows
+whether the phases were usable - so a degenerate stroke produces empty windows
 the formulas skip, not a crash or a nonsense number.
 """
 
