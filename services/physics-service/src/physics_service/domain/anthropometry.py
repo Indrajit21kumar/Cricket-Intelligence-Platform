@@ -163,6 +163,32 @@ class SegmentModel:
             self.segments[s].mass_kg for s in ("thigh", "shank", "foot") if s in self.segments
         )
 
+    def arm_length_m(self) -> float | None:
+        """Shoulder-to-hand length (upper arm + forearm + hand), or None."""
+        order = ("upper_arm", "forearm", "hand")
+        if not all(s in self.segments for s in order):
+            return None
+        return sum(self.segments[s].length_m for s in order)
+
+    def arm_chain_inertia_about_shoulder(self) -> float | None:
+        """Moment of inertia of ONE arm about the shoulder (kg.m^2), or None.
+
+        Parallel-axis over the arm segments: each segment contributes its own
+        I about its CoM plus m*d^2, where d is the distance from the shoulder to
+        that segment's CoM. This is what the torque/energy estimates rotate.
+        """
+        order = ("upper_arm", "forearm", "hand")
+        if not all(s in self.segments for s in order):
+            return None
+        inertia = 0.0
+        proximal = 0.0  # distance from shoulder to the current segment's proximal end
+        for name in order:
+            seg = self.segments[name]
+            shoulder_to_com = proximal + seg.com_distance_m
+            inertia += seg.moment_of_inertia_cm + seg.mass_kg * shoulder_to_com**2
+            proximal += seg.length_m
+        return inertia
+
 
 def _resolve_mass(anthro: Anthropometrics, height_m: float) -> tuple[float, bool, float]:
     """(mass_kg, is_estimated, rel_uncertainty)."""
