@@ -89,6 +89,12 @@ class ReportQuality:
     depth_estimated: bool
     phase_segmentation_method: str
     provisional: bool
+    #: The capture frame rate. Carried in the report because phase boundaries
+    #: are frame indices; without fps a downstream physics consumer (M11) cannot
+    #: turn a phase window into a duration, and M11 must not reach back to the
+    #: M05 calibration (its purity boundary). So the report is self-contained
+    #: only if it also carries the rate that gives its frame indices a timescale.
+    fps: float = 0.0
     flags: tuple[str, ...] = field(default_factory=tuple)
 
 
@@ -132,6 +138,7 @@ def assess_quality(stroke: NormalisedStroke, phases: AlignedPhases) -> ReportQua
         depth_estimated=cal.depth_estimated,
         phase_segmentation_method=phases.method,
         provisional=provisional,
+        fps=cal.fps,
         flags=tuple(flags),
     )
 

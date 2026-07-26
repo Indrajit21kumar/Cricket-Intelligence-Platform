@@ -67,6 +67,9 @@ class BiomechanicsReport:
             "depth_estimated": self.quality.depth_estimated,
             "phase_segmentation_method": self.quality.phase_segmentation_method,
             "provisional": self.quality.provisional,
+            # The capture rate that gives the frame-indexed phase_boundaries a
+            # timescale — M11 reads this rather than the M05 calibration.
+            "fps": round(self.quality.fps, 3),
             "flags": list(self.quality.flags),
             "out_of_expected_range_metrics": list(self.flagged_metrics),
         }

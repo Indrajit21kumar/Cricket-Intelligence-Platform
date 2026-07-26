@@ -154,4 +154,7 @@ FLAG_NON_STANDARD_ANGLE = "NON_STANDARD_ANGLE"
 FLAG_OUT_OF_RANGE = "OUT_OF_EXPECTED_RANGE"
 FLAG_ABSOLUTE_TIMING = "ABSOLUTE_TIMING"
 
-SCHEMA_VERSION = "biomechanics.metrics/1.0"
+# 1.1 adds `fps` to the quality block so the frame-indexed phase_boundaries
+# carry a timescale for the downstream physics engine (M11). Additive, backward
+# compatible: every 1.0 field is unchanged.
+SCHEMA_VERSION = "biomechanics.metrics/1.1"

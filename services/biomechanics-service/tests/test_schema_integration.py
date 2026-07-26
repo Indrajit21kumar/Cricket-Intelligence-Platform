@@ -122,7 +122,7 @@ async def _make_tenant(sf: async_sessionmaker, prefix: str) -> uuid.UUID:
 _INSERT = (
     "INSERT INTO biomechanics_reports "
     "  (id, tenant_id, correlation_id, schema_version) "
-    "VALUES (:id, :tid, :corr, 'biomechanics.metrics/1.0')"
+    "VALUES (:id, :tid, :corr, 'biomechanics.metrics/1.1')"
 )
 
 
