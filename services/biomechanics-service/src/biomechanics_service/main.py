@@ -29,6 +29,7 @@ from biomechanics_service import __version__
 from biomechanics_service.deps import build_deps, shutdown_deps
 from biomechanics_service.health import router as health_router
 from biomechanics_service.health import version_router
+from biomechanics_service.routes import biomechanics_router, internal_router
 from biomechanics_service.settings import get_service_settings
 
 
@@ -65,6 +66,8 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(version_router)
+    app.include_router(biomechanics_router)
+    app.include_router(internal_router)
 
     return app
 

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from biomechanics_service.domain.sources import FakeStrokeSource, StrokeSource
 from biomechanics_service.settings import ServiceSettings
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
@@ -27,6 +28,8 @@ class Deps:
     session_factory: async_sessionmaker[AsyncSession]
     event_bus: KafkaEventBus
     idempotency_store: RedisIdempotencyStore
+    #: Fan-in assembler (fake by default; real M04-M09 fetch later).
+    stroke_source: StrokeSource
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -36,12 +39,14 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     event_bus = KafkaEventBus(bootstrap_servers=settings.kafka_bootstrap)
     await event_bus.start()
     idempotency_store = RedisIdempotencyStore(settings.redis_url)
+    stroke_source: StrokeSource = FakeStrokeSource()
     return Deps(
         settings=settings,
         engine=engine,
         session_factory=session_factory,
         event_bus=event_bus,
         idempotency_store=idempotency_store,
+        stroke_source=stroke_source,
     )
 
 
