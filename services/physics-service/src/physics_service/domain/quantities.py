@@ -139,7 +139,7 @@ CATALOGUE: dict[str, PhysicsQuantityDef] = {
         UNIT_KG_MPS,
         PROVENANCE_ESTIMATED,
         CLASS_MOMENTUM,
-        expected_range=(0.0, 20.0),
+        expected_range=(0.0, 100.0),
     ),
     PH_07: PhysicsQuantityDef(
         PH_07,
@@ -147,7 +147,7 @@ CATALOGUE: dict[str, PhysicsQuantityDef] = {
         UNIT_NM,
         PROVENANCE_ESTIMATED,
         CLASS_TORQUE,
-        expected_range=(0.0, 400.0),
+        expected_range=(0.0, 600.0),
     ),
     PH_08: PhysicsQuantityDef(
         PH_08,
@@ -155,7 +155,7 @@ CATALOGUE: dict[str, PhysicsQuantityDef] = {
         UNIT_JOULE,
         PROVENANCE_ESTIMATED,
         CLASS_ENERGY,
-        expected_range=(0.0, 600.0),
+        expected_range=(0.0, 700.0),
     ),
     PH_09: PhysicsQuantityDef(
         PH_09,
