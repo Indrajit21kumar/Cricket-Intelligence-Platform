@@ -34,3 +34,15 @@ TENANT_ADMIN_ROLES: Final[tuple[str, ...]] = (
 
 #: Roles that can see analytical data for players.
 COACHING_ROLES: Final[tuple[str, ...]] = (COACH, ACADEMY_ADMIN, ORG_ADMIN)
+
+# --- knowledge-graph governance roles (M12) -----------------------------------
+# The knowledge graph is platform-global coaching IP, so authoring is governed
+# by dedicated platform-level roles, not the tenant coaching roles. Separation
+# of duties: an author drafts, a (distinct) reviewer approves.
+RULE_AUTHOR: Final[str] = "rule_author"
+RULE_REVIEWER: Final[str] = "rule_reviewer"
+
+#: May create/edit drafts and submit them for review.
+KG_AUTHORING_ROLES: Final[tuple[str, ...]] = (RULE_AUTHOR, RULE_REVIEWER, PLATFORM_ADMIN)
+#: May approve/reject a rule under review (the expert reviewer).
+KG_REVIEW_ROLES: Final[tuple[str, ...]] = (RULE_REVIEWER, PLATFORM_ADMIN)

@@ -28,6 +28,7 @@ from knowledge_service import __version__
 from knowledge_service.deps import build_deps, shutdown_deps
 from knowledge_service.health import router as health_router
 from knowledge_service.health import version_router
+from knowledge_service.routes import kg_router
 from knowledge_service.settings import get_service_settings
 
 
@@ -62,6 +63,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(version_router)
+    app.include_router(kg_router)
 
     return app
 
