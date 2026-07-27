@@ -16,6 +16,7 @@ at the route layer.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import Any
 
@@ -23,7 +24,12 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from cip_core import Conflict, Forbidden, NotFound, Unprocessable, audit_record
 from cip_data import admin_session
-from knowledge_service.domain import conflicts_repo, rules_repo, versions_repo
+from knowledge_service.domain import (
+    conflicts_repo,
+    rules_repo,
+    sources_repo,
+    versions_repo,
+)
 from knowledge_service.domain.lifecycle import (
     STATUS_APPROVED,
     STATUS_DRAFT,
@@ -33,12 +39,39 @@ from knowledge_service.domain.lifecycle import (
     can_transition,
 )
 from knowledge_service.domain.matcher import MatchFacts, select_matches
+from knowledge_service.domain.ontology import REL_CONTRADICTED_BY, REL_SUPPORTED_BY
 from knowledge_service.domain.rag import RagQuery, ground
 from knowledge_service.domain.rule_schema import RuleValidationError, validate_rule
 
 
-def _snapshot(row: dict[str, Any]) -> dict[str, Any]:
-    """The frozen, citable content of a rule row (no mutable governance fields)."""
+def _evidence_block(row: dict[str, Any], sources: list[dict[str, Any]]) -> dict[str, Any]:
+    """The Book 10 evidence served alongside a rule — tier + who signed it off +
+    the cited sources. Tier and validated_by are surfaced as-is so downstream
+    (M14) renders them honestly and never presents Tier 2/3 as validated."""
+    return {
+        "tier": row.get("evidence_tier"),
+        "validated_by": row.get("validated_by"),
+        "contradicts_tradition": bool(row.get("contradicts_tradition", False)),
+        "contradiction_note": row.get("contradiction_note"),
+        "sources": [
+            {
+                "source_id": str(s["source_id"]),
+                "relation": s["relation"],
+                "locator": s.get("locator"),
+                "title": s.get("title"),
+                "authors": s.get("authors"),
+                "year": s.get("year"),
+                "authority": s.get("authority"),
+                "url_or_ref": s.get("url_or_ref"),
+                "vetted_by": s.get("vetted_by"),
+            }
+            for s in sources
+        ],
+    }
+
+
+def _snapshot(row: dict[str, Any], sources: list[dict[str, Any]]) -> dict[str, Any]:
+    """The frozen, citable content of a rule row + its evidence (Book 10)."""
     return {
         "rule_id": row["rule_id"],
         "version": row["version"],
@@ -48,6 +81,7 @@ def _snapshot(row: dict[str, Any]) -> dict[str, Any]:
         "risk": row["risk"],
         "drill": row["drill"],
         "confidence": row["confidence"],
+        "evidence": _evidence_block(row, sources),
     }
 
 
@@ -202,6 +236,12 @@ async def release_rule(
         if not can_transition(current["status"], STATUS_RELEASED):
             raise Conflict(f"only an approved rule can be released (status is {current['status']})")
 
+        # Book 10 vetting gate: a rule carrying evidence may only be released once
+        # its sources are SAB-vetted and its tier is signed off, and a tradition-
+        # contradicting rule must cite the contradicting source (never dropped).
+        sources = await sources_repo.sources_for_rule(session, current["rule_id"])
+        _check_evidence_gate(current, sources)
+
         # Supersede the outgoing released version of this rule_id, if any.
         previous = await rules_repo.get_released(session, current["rule_id"])
         if previous is not None and previous["id"] != current["id"]:
@@ -214,7 +254,7 @@ async def release_rule(
             session,
             rule_id=current["rule_id"],
             version=current["version"],
-            snapshot=_snapshot(current),
+            snapshot=_snapshot(current, sources),
             released=True,
         )
         row = await rules_repo.set_status(session, row_id, STATUS_RELEASED)
@@ -227,6 +267,146 @@ async def release_rule(
                 "row_id": str(row_id),
                 "superseded": str(previous["id"]) if previous else None,
             },
+        )
+    return row
+
+
+def _check_evidence_gate(rule: dict[str, Any], sources: list[dict[str, Any]]) -> None:
+    """Block release of a rule whose evidence is not fully vetted (FR-M12-12/14)."""
+    has_evidence = rule.get("evidence_tier") is not None or bool(sources)
+    if has_evidence:
+        if any(not s.get("vetted_by") for s in sources):
+            raise Conflict("cannot release: a linked source is not SAB-vetted")
+        if rule.get("validated_by") is None:
+            raise Conflict("cannot release: the evidence tier is not signed off (validated_by)")
+    if rule.get("contradicts_tradition") and not any(
+        s["relation"] == REL_CONTRADICTED_BY for s in sources
+    ):
+        raise Conflict(
+            "a tradition-contradicting rule must cite the contradicting source, not drop it"
+        )
+
+
+async def create_source(
+    session_factory: async_sessionmaker[Any], *, payload: dict[str, Any], actor: str
+) -> dict[str, Any]:
+    """Register a cited source (unvetted until SAB sign-off)."""
+    title = payload.get("title")
+    if not isinstance(title, str) or not title.strip():
+        raise Unprocessable("source.title is required")
+    async with admin_session(session_factory) as session:
+        row = await sources_repo.insert_source(
+            session,
+            type_=str(payload.get("type", "paper")),
+            title=title,
+            authors=payload.get("authors"),
+            year=payload.get("year"),
+            authority=payload.get("authority"),
+            url_or_ref=payload.get("url_or_ref"),
+            license_note=payload.get("license_note"),
+        )
+        await audit_record(
+            session,
+            action="kg.source.created",
+            entity=f"source:{row['id']}",
+            actor=actor,
+            meta={"title": title},
+        )
+    return row
+
+
+async def vet_source(
+    session_factory: async_sessionmaker[Any],
+    *,
+    source_id: uuid.UUID,
+    vetted_by: dict[str, Any],
+    actor: str,
+) -> dict[str, Any]:
+    """SAB sign-off on a source (records the reviewer + credential)."""
+    async with admin_session(session_factory) as session:
+        row = await sources_repo.vet_source(session, source_id, vetted_by=vetted_by)
+        if row is None:
+            raise NotFound("source not found")
+        await audit_record(
+            session,
+            action="kg.source.vetted",
+            entity=f"source:{source_id}",
+            actor=actor,
+            meta={"vetted_by": vetted_by},
+        )
+    return row
+
+
+async def attach_source(
+    session_factory: async_sessionmaker[Any],
+    *,
+    row_id: uuid.UUID,
+    source_id: uuid.UUID,
+    relation: str,
+    locator: str | None,
+    actor: str,
+) -> dict[str, Any]:
+    """Link a source to a rule (supported_by / contradicted_by)."""
+    if relation not in (REL_SUPPORTED_BY, REL_CONTRADICTED_BY):
+        raise Unprocessable(f"relation must be {REL_SUPPORTED_BY} or {REL_CONTRADICTED_BY}")
+    async with admin_session(session_factory) as session:
+        rule = await rules_repo.get_by_id(session, row_id)
+        if rule is None:
+            raise NotFound("rule not found")
+        if rule["status"] == STATUS_RELEASED:
+            raise Conflict("cannot change the evidence of a released rule; supersede it instead")
+        if await sources_repo.get_source(session, source_id) is None:
+            raise NotFound("source not found")
+        link = await sources_repo.link_source(
+            session,
+            rule_id=rule["rule_id"],
+            source_id=source_id,
+            relation=relation,
+            locator=locator,
+        )
+        await audit_record(
+            session,
+            action="kg.rule.source_linked",
+            entity=f"rule:{rule['rule_id']}:v{rule['version']}",
+            actor=actor,
+            meta={"source_id": str(source_id), "relation": relation},
+        )
+    return link
+
+
+async def set_rule_evidence(
+    session_factory: async_sessionmaker[Any],
+    *,
+    row_id: uuid.UUID,
+    evidence_tier: int | None,
+    contradicts_tradition: bool,
+    contradiction_note: str | None,
+    validated_by: dict[str, Any] | None,
+    actor: str,
+) -> dict[str, Any]:
+    """Set a rule's evidence tier + SAB sign-off (Book 10)."""
+    if evidence_tier is not None and evidence_tier not in (1, 2, 3):
+        raise Unprocessable("evidence_tier must be 1 (validated), 2 (consensus), or 3 (folklore)")
+    async with admin_session(session_factory) as session:
+        rule = await rules_repo.get_by_id(session, row_id)
+        if rule is None:
+            raise NotFound("rule not found")
+        if rule["status"] == STATUS_RELEASED:
+            raise Conflict("cannot change the evidence of a released rule; supersede it instead")
+        row = await rules_repo.set_evidence(
+            session,
+            row_id,
+            evidence_tier=evidence_tier,
+            contradicts_tradition=contradicts_tradition,
+            contradiction_note=contradiction_note,
+            validated_by=json.dumps(validated_by) if validated_by is not None else None,
+        )
+        await audit_record(
+            session,
+            action="kg.rule.evidence_set",
+            entity=f"rule:{rule['rule_id']}:v{rule['version']}",
+            actor=actor,
+            meta={"tier": evidence_tier, "validated_by": validated_by},
         )
     return row
 

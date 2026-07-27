@@ -80,6 +80,9 @@ class MatchedRule:
     cause: str | None
     risk: dict[str, Any]
     drill: dict[str, Any]
+    #: Book 10 evidence (tier, validated_by, sources, contradicts_tradition),
+    #: so M13 can weigh and cite the rule's credibility.
+    evidence: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -90,6 +93,7 @@ class MatchedRule:
             "cause": self.cause,
             "risk": self.risk,
             "drill": self.drill,
+            "evidence": self.evidence,
         }
 
 
@@ -156,6 +160,7 @@ def select_matches(
                     cause=snapshot.get("cause"),
                     risk=snapshot.get("risk", {}),
                     drill=snapshot.get("drill", {}),
+                    evidence=snapshot.get("evidence", {}),
                 )
             )
     # Highest-confidence first; None confidence sinks to the bottom.

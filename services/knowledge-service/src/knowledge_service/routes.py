@@ -63,6 +63,34 @@ class ResolveConflictRequest(BaseModel):
     note: str | None = None
 
 
+class SourceRequest(BaseModel):
+    type: str = Field("paper", description="paper | manual | expert")
+    title: str
+    authors: str | None = None
+    year: int | None = None
+    authority: str | None = None
+    url_or_ref: str | None = None
+    license_note: str | None = None
+
+
+class VetRequest(BaseModel):
+    reviewer: str
+    credential: str
+
+
+class AttachSourceRequest(BaseModel):
+    source_id: uuid.UUID
+    relation: str = Field(..., description="supported_by | contradicted_by")
+    locator: str | None = None
+
+
+class EvidenceRequest(BaseModel):
+    evidence_tier: int | None = Field(None, ge=1, le=3)
+    contradicts_tradition: bool = False
+    contradiction_note: str | None = None
+    validated_by: dict[str, Any] | None = None
+
+
 class RuleResponse(BaseModel):
     id: uuid.UUID
     rule_id: str
@@ -234,6 +262,73 @@ async def export_graph(
 ) -> list[dict[str, Any]]:
     """Export the released graph for backup / offline review (FR-M12-10)."""
     return await service.export_released(deps.session_factory)
+
+
+# --- evidence layer (Book 10) ---------------------------------------------------
+@kg_router.post("/sources", response_model=dict[str, Any], status_code=status.HTTP_201_CREATED)
+async def create_source(
+    body: SourceRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*roles.KG_AUTHORING_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> dict[str, Any]:
+    """Register a cited source (unvetted until SAB sign-off)."""
+    return await service.create_source(
+        deps.session_factory, payload=body.model_dump(), actor=str(principal.person_id)
+    )
+
+
+@kg_router.post("/sources/{source_id}/vet", response_model=dict[str, Any])
+async def vet_source(
+    source_id: uuid.UUID,
+    body: VetRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*roles.KG_REVIEW_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> dict[str, Any]:
+    """SAB sign-off on a source (reviewer + credential)."""
+    return await service.vet_source(
+        deps.session_factory,
+        source_id=source_id,
+        vetted_by=body.model_dump(),
+        actor=str(principal.person_id),
+    )
+
+
+@kg_router.post("/rules/{row_id}/sources", response_model=dict[str, Any])
+async def attach_source(
+    row_id: uuid.UUID,
+    body: AttachSourceRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*roles.KG_AUTHORING_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> dict[str, Any]:
+    """Link a source to a rule (supported_by / contradicted_by)."""
+    return await service.attach_source(
+        deps.session_factory,
+        row_id=row_id,
+        source_id=body.source_id,
+        relation=body.relation,
+        locator=body.locator,
+        actor=str(principal.person_id),
+    )
+
+
+@kg_router.post("/rules/{row_id}/evidence", response_model=RuleResponse)
+async def set_evidence(
+    row_id: uuid.UUID,
+    body: EvidenceRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*roles.KG_REVIEW_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> RuleResponse:
+    """Set a rule's evidence tier + SAB sign-off (Book 10)."""
+    row = await service.set_rule_evidence(
+        deps.session_factory,
+        row_id=row_id,
+        evidence_tier=body.evidence_tier,
+        contradicts_tradition=body.contradicts_tradition,
+        contradiction_note=body.contradiction_note,
+        validated_by=body.validated_by,
+        actor=str(principal.person_id),
+    )
+    return _to_response(row)
 
 
 class RuleHistoryResponse(BaseModel):

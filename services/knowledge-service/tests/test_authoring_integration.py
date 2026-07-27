@@ -421,3 +421,155 @@ class TestConflictsAndConfidence:
         r = await client.get("/v1/kg/export", headers=_headers(REVIEWER, roles.RULE_REVIEWER))
         assert r.status_code == 200
         assert rule_id in [row["rule_id"] for row in r.json()]
+
+
+async def _submit_and_approve(client: httpx.AsyncClient, row_id: str) -> None:
+    await client.patch(
+        f"/v1/kg/rules/{row_id}", headers=_headers(AUTHOR, roles.RULE_AUTHOR), json={"submit": True}
+    )
+    await client.post(
+        f"/v1/kg/rules/{row_id}/review",
+        headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+        json={"decision": "approve"},
+    )
+
+
+async def _create_source(client: httpx.AsyncClient, *, vet: bool) -> str:
+    r = await client.post(
+        "/v1/kg/sources",
+        headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+        json={
+            "type": "paper",
+            "title": "Batting biomechanics",
+            "authors": "A. Coach",
+            "year": 2020,
+        },
+    )
+    source_id = r.json()["id"]
+    if vet:
+        await client.post(
+            f"/v1/kg/sources/{source_id}/vet",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"reviewer": "Dr SAB", "credential": "PhD Sports Science"},
+        )
+    return str(source_id)
+
+
+class TestEvidenceLayer:
+    async def test_released_rule_serves_vetted_evidence(self, client: httpx.AsyncClient) -> None:
+        """AC-M12-08: vetted sources + tier + validated_by serve to M13/M14."""
+        marker = uuid.uuid4().hex
+        body = _marker_rule(marker)
+        r = await client.post(
+            "/v1/kg/rules", headers=_headers(AUTHOR, roles.RULE_AUTHOR), json=body
+        )
+        row_id = r.json()["id"]
+        source_id = await _create_source(client, vet=True)
+        await client.post(
+            f"/v1/kg/rules/{row_id}/sources",
+            headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+            json={"source_id": source_id, "relation": "supported_by", "locator": "p.42"},
+        )
+        await client.post(
+            f"/v1/kg/rules/{row_id}/evidence",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"evidence_tier": 1, "validated_by": {"reviewer": "Dr SAB", "credential": "PhD"}},
+        )
+        await _submit_and_approve(client, row_id)
+        r = await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": row_id},
+        )
+        assert r.status_code == 200, r.text
+
+        r = await client.post(
+            "/internal/kg/match",
+            headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+            json={"context": {"test_marker": marker}},
+        )
+        evidence = r.json()["matched"][0]["evidence"]
+        assert evidence["tier"] == 1
+        assert evidence["validated_by"] == {"reviewer": "Dr SAB", "credential": "PhD"}
+        assert evidence["sources"][0]["title"] == "Batting biomechanics"
+
+    async def test_release_blocked_when_a_source_is_unvetted(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """FR-M12-12: a rule backed by an unvetted source cannot serve."""
+        body = _marker_rule(uuid.uuid4().hex)
+        r = await client.post(
+            "/v1/kg/rules", headers=_headers(AUTHOR, roles.RULE_AUTHOR), json=body
+        )
+        row_id = r.json()["id"]
+        source_id = await _create_source(client, vet=False)  # NOT vetted
+        await client.post(
+            f"/v1/kg/rules/{row_id}/sources",
+            headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+            json={"source_id": source_id, "relation": "supported_by"},
+        )
+        await client.post(
+            f"/v1/kg/rules/{row_id}/evidence",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"evidence_tier": 2, "validated_by": {"reviewer": "Dr SAB", "credential": "PhD"}},
+        )
+        await _submit_and_approve(client, row_id)
+        r = await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": row_id},
+        )
+        assert r.status_code == 409, r.text
+
+    async def test_tradition_contradicting_rule_needs_its_citation(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """AC-M12-09: a tradition-contradicting rule is stored + served with its
+        contradicting citation, never silently dropped."""
+        marker = uuid.uuid4().hex
+        body = _marker_rule(marker)
+        r = await client.post(
+            "/v1/kg/rules", headers=_headers(AUTHOR, roles.RULE_AUTHOR), json=body
+        )
+        row_id = r.json()["id"]
+        await client.post(
+            f"/v1/kg/rules/{row_id}/evidence",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={
+                "evidence_tier": 3,
+                "contradicts_tradition": True,
+                "contradiction_note": "contradicts the 'get to the pitch' cue",
+                "validated_by": {"reviewer": "Dr SAB", "credential": "PhD"},
+            },
+        )
+        await _submit_and_approve(client, row_id)
+        # No contradicting citation yet -> release refused (not dropped).
+        r = await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": row_id},
+        )
+        assert r.status_code == 409, r.text
+
+        # Attach the contradicting source (allowed while approved), then release
+        # succeeds and serves it — the rule is kept, its citation carried.
+        source_id = await _create_source(client, vet=True)
+        await client.post(
+            f"/v1/kg/rules/{row_id}/sources",
+            headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+            json={"source_id": source_id, "relation": "contradicted_by", "locator": "p.7"},
+        )
+        r = await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": row_id},
+        )
+        assert r.status_code == 200, r.text
+        r = await client.post(
+            "/internal/kg/match",
+            headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+            json={"context": {"test_marker": marker}},
+        )
+        evidence = r.json()["matched"][0]["evidence"]
+        assert evidence["contradicts_tradition"] is True
+        assert any(s["relation"] == "contradicted_by" for s in evidence["sources"])

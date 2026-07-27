@@ -40,6 +40,7 @@ class GroundedItem:
     risk: dict[str, Any]
     drill: dict[str, Any]
     confidence: float | None
+    evidence: dict[str, Any]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -50,6 +51,8 @@ class GroundedItem:
             "risk": self.risk,
             "drill": self.drill,
             "confidence": self.confidence,
+            # Book 10 evidence — tier, who validated it, and the cited sources.
+            "evidence": self.evidence,
             # The citation makes the claim traceable to an exact rule version.
             "citation": {"rule_id": self.rule_id, "version": self.version},
         }
@@ -91,6 +94,9 @@ def ground(released_snapshots: Sequence[Mapping[str, Any]], query: RagQuery) -> 
                 if isinstance(snapshot.get("drill"), Mapping)
                 else {},
                 confidence=snapshot.get("confidence"),
+                evidence=snapshot.get("evidence", {})
+                if isinstance(snapshot.get("evidence"), Mapping)
+                else {},
             )
         )
     items.sort(key=lambda i: i.confidence if i.confidence is not None else -1.0, reverse=True)

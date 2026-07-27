@@ -19,7 +19,8 @@ from knowledge_service.domain.rule_schema import Rule
 
 _COLUMNS = (
     "id, rule_id, version, conditions, fault, cause, risk, drill, confidence, "
-    "status, author, reviewer, created_at, updated_at"
+    "status, author, reviewer, evidence_tier, contradicts_tradition, "
+    "contradiction_note, evidence_last_reviewed, validated_by, created_at, updated_at"
 )
 
 
@@ -106,6 +107,46 @@ async def update_content(session: AsyncSession, row_id: uuid.UUID, rule: Rule) -
                     "risk": json.dumps(rule.risk.to_dict()),
                     "drill": json.dumps(rule.drill.to_dict()),
                     "conf": rule.confidence,
+                },
+            )
+        )
+        .mappings()
+        .one()
+    )
+    return dict(row)
+
+
+async def set_evidence(
+    session: AsyncSession,
+    row_id: uuid.UUID,
+    *,
+    evidence_tier: int | None,
+    contradicts_tradition: bool,
+    contradiction_note: str | None,
+    validated_by: str | None,
+) -> dict[str, Any]:
+    """Set a rule's evidence metadata (tier sign-off; Book 10).
+
+    ``validated_by`` is a JSON string ({reviewer, credential}) or None; stamping
+    it also sets ``evidence_last_reviewed`` to now().
+    """
+    row = (
+        (
+            await session.execute(
+                text(
+                    "UPDATE rules SET evidence_tier = :tier, "  # nosec B608
+                    "  contradicts_tradition = :contra, contradiction_note = :note, "
+                    "  validated_by = cast(:vb as jsonb), "
+                    "  evidence_last_reviewed = CASE WHEN :vb IS NULL THEN evidence_last_reviewed "
+                    "    ELSE now() END, updated_at = now() "
+                    f"WHERE id = :id RETURNING {_COLUMNS}"
+                ),
+                {
+                    "id": row_id,
+                    "tier": evidence_tier,
+                    "contra": contradicts_tradition,
+                    "note": contradiction_note,
+                    "vb": validated_by,
                 },
             )
         )
