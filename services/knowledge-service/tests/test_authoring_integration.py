@@ -261,3 +261,57 @@ class TestRelease:
         r = await client.get(f"/v1/kg/rules/{rule_id}", headers=_headers(AUTHOR, roles.RULE_AUTHOR))
         by_version = {v["version"]: v["status"] for v in r.json()["versions"]}
         assert by_version == {1: "superseded", 2: "released"}
+
+
+def _marker_rule(marker: str) -> dict[str, Any]:
+    """A rule keyed by a unique context marker so tests never collide."""
+    body = _rule()
+    body["conditions"] = [{"kind": "context", "field": "test_marker", "op": "eq", "value": marker}]
+    return body
+
+
+class TestMatchServing:
+    async def test_a_released_rule_matches_facts(self, client: httpx.AsyncClient) -> None:
+        marker = uuid.uuid4().hex
+        row_id = await _drive_to_approved(client, _marker_rule(marker))
+        await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": row_id},
+        )
+        r = await client.post(
+            "/internal/kg/match",
+            headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+            json={"context": {"test_marker": marker}},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["count"] == 1
+        assert r.json()["matched"][0]["fault"]  # served with its content
+
+    async def test_an_unreleased_rule_never_matches(self, client: httpx.AsyncClient) -> None:
+        """AC-M12-02: an approved-but-unreleased rule cannot reach reasoning."""
+        marker = uuid.uuid4().hex
+        await _drive_to_approved(client, _marker_rule(marker))  # approved, NOT released
+        r = await client.post(
+            "/internal/kg/match",
+            headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+            json={"context": {"test_marker": marker}},
+        )
+        assert r.status_code == 200
+        assert r.json()["count"] == 0
+
+    async def test_non_matching_facts_return_nothing(self, client: httpx.AsyncClient) -> None:
+        marker = uuid.uuid4().hex
+        row_id = await _drive_to_approved(client, _marker_rule(marker))
+        await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": row_id},
+        )
+        r = await client.post(
+            "/internal/kg/match",
+            headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+            json={"context": {"test_marker": "a-different-marker"}},
+        )
+        assert r.status_code == 200
+        assert marker not in [m["rule_id"] for m in r.json()["matched"]]

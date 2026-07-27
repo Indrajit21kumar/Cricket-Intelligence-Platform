@@ -32,6 +32,7 @@ from knowledge_service import service
 from knowledge_service.deps import Deps, get_deps
 
 kg_router = APIRouter(prefix="/v1/kg", tags=["knowledge"])
+internal_router = APIRouter(prefix="/internal/kg", tags=["internal"])
 
 _EDITABLE = ("conditions", "fault", "cause", "risk", "drill", "confidence")
 
@@ -150,6 +151,26 @@ async def release_rule(
 class RuleHistoryResponse(BaseModel):
     rule_id: str
     versions: list[RuleResponse]
+
+
+class MatchResponse(BaseModel):
+    matched: list[dict[str, Any]]
+    count: int
+
+
+@internal_router.post("/match", response_model=MatchResponse)
+async def match_rules(
+    facts: dict[str, Any],
+    _principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> MatchResponse:
+    """Facts (metrics/phases/shot/context) -> applicable RELEASED rules, for M13.
+
+    Only rules in the pinned released graph are considered, so a draft or
+    approved-but-unreleased rule never reaches reasoning (AC-M12-02).
+    """
+    matched = await service.match_facts(deps.session_factory, facts_payload=facts)
+    return MatchResponse(matched=matched, count=len(matched))
 
 
 @kg_router.get("/rules/{rule_id}", response_model=RuleHistoryResponse)

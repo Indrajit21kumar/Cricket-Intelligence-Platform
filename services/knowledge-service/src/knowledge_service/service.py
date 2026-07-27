@@ -31,6 +31,7 @@ from knowledge_service.domain.lifecycle import (
     STATUS_SUPERSEDED,
     can_transition,
 )
+from knowledge_service.domain.matcher import MatchFacts, select_matches
 from knowledge_service.domain.rule_schema import RuleValidationError, validate_rule
 
 
@@ -226,6 +227,16 @@ async def release_rule(
             },
         )
     return row
+
+
+async def match_facts(
+    session_factory: async_sessionmaker[Any], *, facts_payload: dict[str, Any]
+) -> list[dict[str, Any]]:
+    """Return the RELEASED rules whose conditions the stroke's facts satisfy (M13)."""
+    facts = MatchFacts.from_payload(facts_payload)
+    async with admin_session(session_factory) as session:
+        released = await versions_repo.list_released(session)
+    return [m.to_dict() for m in select_matches(released, facts)]
 
 
 async def get_rule_versions(

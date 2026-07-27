@@ -73,6 +73,16 @@ async def get_released(session: AsyncSession, rule_id: str) -> dict[str, Any] | 
     return dict(row) if row else None
 
 
+async def list_released(session: AsyncSession) -> list[dict[str, Any]]:
+    """Every released snapshot across all rules — the served (pinned) graph."""
+    query = (
+        f"SELECT {_COLUMNS} FROM rule_versions "  # nosec B608 -- _COLUMNS is a constant
+        "WHERE released ORDER BY rule_id, version"
+    )
+    rows = (await session.execute(text(query))).mappings().all()
+    return [dict(r) for r in rows]
+
+
 async def list_snapshots(session: AsyncSession, rule_id: str) -> list[dict[str, Any]]:
     query = (
         f"SELECT {_COLUMNS} FROM rule_versions "  # nosec B608 -- _COLUMNS is a constant
