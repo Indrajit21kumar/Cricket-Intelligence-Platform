@@ -73,6 +73,7 @@ jobs:
           uv run pytest services/ball-service/tests/test_validation.py -q
           uv run pytest services/shot-service/tests/test_validation.py -q
           uv run pytest services/biomechanics-service/tests/test_validation.py -q
+          uv run pytest services/physics-service/tests/test_validation.py -q
       - name: Upload coverage
         if: always()
         uses: actions/upload-artifact@v4

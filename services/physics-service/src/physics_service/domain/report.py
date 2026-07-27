@@ -27,13 +27,15 @@ from physics_service.domain.biomech_input import BiomechanicsInput
 from physics_service.domain.dynamics import estimate_dynamics
 from physics_service.domain.kinematics import measure_kinematics
 from physics_service.domain.kinetic_chain import KineticChain, build_kinetic_chain
+from physics_service.domain.models import ACTIVE_MODEL_VERSION
 from physics_service.domain.quantities import PH_IDS, SCHEMA_VERSION, PhysicsQuantity
 from physics_service.domain.ranges import check_ranges
 from physics_service.domain.trust import enforce_trust
 
-#: The estimation-model version stamped on every report. Step 8 versions and
-#: validation-gates this; changing it is a gated model change (NFR-M11-04).
-DEFAULT_MODEL_VERSION = "phys-est-1.0.0"
+#: The estimation-model version stamped on every report — the single source of
+#: truth is the model registry, which also gates production readiness
+#: (NFR-M11-04). Changing it is a deliberate, reviewable registry change.
+DEFAULT_MODEL_VERSION = ACTIVE_MODEL_VERSION
 
 # --- M11 quality flags (in addition to the M10 flags propagated through) ---
 FLAG_MASS_ESTIMATED = "MASS_ESTIMATED"
