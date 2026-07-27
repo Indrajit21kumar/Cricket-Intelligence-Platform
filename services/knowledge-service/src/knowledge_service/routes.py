@@ -17,7 +17,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, status
+from fastapi import APIRouter, Depends, Query, status
 from pydantic import BaseModel, Field
 
 from cip_core import (
@@ -44,6 +44,23 @@ class ReviewRequest(BaseModel):
 
 class ReleaseRequest(BaseModel):
     row_id: uuid.UUID = Field(..., description="the approved rule version to pin into the graph")
+
+
+class ConfidenceRequest(BaseModel):
+    confidence: float = Field(..., ge=0.0, le=1.0)
+    reason: str | None = None
+
+
+class ConflictRequest(BaseModel):
+    rule_a: str
+    rule_b: str
+    precedence: str | None = Field(None, description="rule_id that wins; None = still open")
+    note: str | None = None
+
+
+class ResolveConflictRequest(BaseModel):
+    precedence: str = Field(..., description="the rule_id that takes precedence")
+    note: str | None = None
 
 
 class RuleResponse(BaseModel):
@@ -146,6 +163,77 @@ async def release_rule(
         deps.session_factory, row_id=body.row_id, actor=str(principal.person_id)
     )
     return _to_response(row)
+
+
+@kg_router.post("/rules/{row_id}/confidence", response_model=RuleResponse)
+async def adjust_confidence(
+    row_id: uuid.UUID,
+    body: ConfidenceRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*roles.KG_REVIEW_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> RuleResponse:
+    """Evidence-driven confidence adjustment (audited)."""
+    row = await service.adjust_confidence(
+        deps.session_factory,
+        row_id=row_id,
+        confidence=body.confidence,
+        actor=str(principal.person_id),
+        reason=body.reason,
+    )
+    return _to_response(row)
+
+
+@kg_router.post("/conflicts", response_model=dict[str, Any])
+async def record_conflict(
+    body: ConflictRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*roles.KG_REVIEW_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> dict[str, Any]:
+    """Record a conflict between two rules, optionally with a resolving precedence."""
+    return await service.record_conflict(
+        deps.session_factory,
+        rule_a=body.rule_a,
+        rule_b=body.rule_b,
+        precedence=body.precedence,
+        note=body.note,
+        actor=str(principal.person_id),
+    )
+
+
+@kg_router.get("/conflicts", response_model=list[dict[str, Any]])
+async def list_conflicts(
+    _principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*roles.KG_REVIEW_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+    unresolved: Annotated[bool, Query()] = False,
+) -> list[dict[str, Any]]:
+    """Surface conflicts to reviewers (optionally only the unresolved ones)."""
+    return await service.list_conflicts(deps.session_factory, unresolved_only=unresolved)
+
+
+@kg_router.post("/conflicts/{conflict_id}/resolve", response_model=dict[str, Any])
+async def resolve_conflict(
+    conflict_id: uuid.UUID,
+    body: ResolveConflictRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*roles.KG_REVIEW_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> dict[str, Any]:
+    """Resolve a conflict by recording which rule takes precedence."""
+    return await service.resolve_conflict(
+        deps.session_factory,
+        conflict_id=conflict_id,
+        precedence=body.precedence,
+        note=body.note,
+        actor=str(principal.person_id),
+    )
+
+
+@kg_router.get("/export", response_model=list[dict[str, Any]])
+async def export_graph(
+    _principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*roles.KG_REVIEW_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> list[dict[str, Any]]:
+    """Export the released graph for backup / offline review (FR-M12-10)."""
+    return await service.export_released(deps.session_factory)
 
 
 class RuleHistoryResponse(BaseModel):

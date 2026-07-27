@@ -115,6 +115,26 @@ async def update_content(session: AsyncSession, row_id: uuid.UUID, rule: Rule) -
     return dict(row)
 
 
+async def set_confidence(
+    session: AsyncSession, row_id: uuid.UUID, confidence: float
+) -> dict[str, Any]:
+    """Adjust a rule's authored confidence (evidence-driven drift, §6/FR-M12-08)."""
+    row = (
+        (
+            await session.execute(
+                text(
+                    "UPDATE rules SET confidence = :conf, updated_at = now() "  # nosec B608
+                    f"WHERE id = :id RETURNING {_COLUMNS}"
+                ),
+                {"id": row_id, "conf": confidence},
+            )
+        )
+        .mappings()
+        .one()
+    )
+    return dict(row)
+
+
 async def set_status(
     session: AsyncSession, row_id: uuid.UUID, status: str, *, reviewer: str | None = None
 ) -> dict[str, Any]:

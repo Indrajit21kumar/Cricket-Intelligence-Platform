@@ -16,13 +16,14 @@ at the route layer.
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from cip_core import Conflict, Forbidden, NotFound, Unprocessable, audit_record
 from cip_data import admin_session
-from knowledge_service.domain import rules_repo, versions_repo
+from knowledge_service.domain import conflicts_repo, rules_repo, versions_repo
 from knowledge_service.domain.lifecycle import (
     STATUS_APPROVED,
     STATUS_DRAFT,
@@ -248,6 +249,107 @@ async def query_knowledge(
     async with admin_session(session_factory) as session:
         released = await versions_repo.list_released(session)
     return [item.to_dict() for item in ground(released, query)]
+
+
+async def adjust_confidence(
+    session_factory: async_sessionmaker[Any],
+    *,
+    row_id: uuid.UUID,
+    confidence: float,
+    actor: str,
+    reason: str | None = None,
+) -> dict[str, Any]:
+    """Evidence-driven confidence adjustment (FR-M12-08), fully audited.
+
+    Confidence is the one quantity §6 lets drift within a pinned version, so a
+    released rule's served snapshot confidence is updated too — the version's
+    logic (conditions/fault/cause/risk/drill) is untouched, preserving
+    reproduction.
+    """
+    if not 0.0 <= confidence <= 1.0:
+        raise Unprocessable("confidence must be in [0, 1]")
+    async with admin_session(session_factory) as session:
+        current = await rules_repo.get_by_id(session, row_id)
+        if current is None:
+            raise NotFound("rule not found")
+        old = current["confidence"]
+        row = await rules_repo.set_confidence(session, row_id, confidence)
+        if current["status"] == STATUS_RELEASED:
+            await versions_repo.update_confidence(
+                session,
+                rule_id=current["rule_id"],
+                version=current["version"],
+                confidence=confidence,
+            )
+        await audit_record(
+            session,
+            action="kg.rule.confidence_adjusted",
+            entity=f"rule:{current['rule_id']}:v{current['version']}",
+            actor=actor,
+            meta={"row_id": str(row_id), "old": old, "new": confidence, "reason": reason},
+        )
+    return row
+
+
+async def record_conflict(
+    session_factory: async_sessionmaker[Any],
+    *,
+    rule_a: str,
+    rule_b: str,
+    precedence: str | None,
+    note: str | None,
+    actor: str,
+) -> dict[str, Any]:
+    """Record a conflict between two rules (with optional resolving precedence)."""
+    async with admin_session(session_factory) as session:
+        row = await conflicts_repo.upsert_conflict(
+            session, rule_a=rule_a, rule_b=rule_b, precedence=precedence, note=note
+        )
+        await audit_record(
+            session,
+            action="kg.conflict.recorded",
+            entity=f"conflict:{rule_a}|{rule_b}",
+            actor=actor,
+            meta={"precedence": precedence, "resolved": row["resolved"]},
+        )
+    return row
+
+
+async def resolve_conflict(
+    session_factory: async_sessionmaker[Any],
+    *,
+    conflict_id: uuid.UUID,
+    precedence: str,
+    note: str | None,
+    actor: str,
+) -> dict[str, Any]:
+    async with admin_session(session_factory) as session:
+        row = await conflicts_repo.resolve_conflict(
+            session, conflict_id, precedence=precedence, note=note
+        )
+        if row is None:
+            raise NotFound("conflict not found")
+        await audit_record(
+            session,
+            action="kg.conflict.resolved",
+            entity=f"conflict:{conflict_id}",
+            actor=actor,
+            meta={"precedence": precedence},
+        )
+    return row
+
+
+async def list_conflicts(
+    session_factory: async_sessionmaker[Any], *, unresolved_only: bool = False
+) -> list[dict[str, Any]]:
+    async with admin_session(session_factory) as session:
+        return await conflicts_repo.list_conflicts(session, unresolved_only=unresolved_only)
+
+
+async def export_released(session_factory: async_sessionmaker[Any]) -> list[dict[str, Any]]:
+    """Export the released graph (backup / offline review, FR-M12-10)."""
+    async with admin_session(session_factory) as session:
+        return await versions_repo.list_released(session)
 
 
 async def get_rule_versions(

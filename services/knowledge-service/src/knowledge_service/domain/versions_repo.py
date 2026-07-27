@@ -64,6 +64,26 @@ async def mark_unreleased(session: AsyncSession, *, rule_id: str, version: int) 
     )
 
 
+async def update_confidence(
+    session: AsyncSession, *, rule_id: str, version: int, confidence: float
+) -> None:
+    """Drift the confidence on a released snapshot.
+
+    Confidence is the one field §6 allows to evolve independently of the version
+    content (evidence adjustment), so updating it does NOT fork a version and
+    does NOT touch the conditions/fault/cause/risk/drill the reproduction
+    guarantee protects — only the number the served graph reports.
+    """
+    await session.execute(
+        text(
+            "UPDATE rule_versions "
+            "SET snapshot = jsonb_set(snapshot, '{confidence}', to_jsonb(:conf::double precision)) "
+            "WHERE rule_id = :rid AND version = :ver"
+        ),
+        {"rid": rule_id, "ver": version, "conf": confidence},
+    )
+
+
 async def get_released(session: AsyncSession, rule_id: str) -> dict[str, Any] | None:
     query = (
         f"SELECT {_COLUMNS} FROM rule_versions "  # nosec B608 -- _COLUMNS is a constant

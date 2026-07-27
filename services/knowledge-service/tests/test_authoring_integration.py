@@ -347,3 +347,77 @@ class TestRagServing:
         )
         assert r.status_code == 200
         assert r.json()["count"] == 0
+
+
+class TestConflictsAndConfidence:
+    async def test_conflict_record_list_resolve(self, client: httpx.AsyncClient) -> None:
+        """AC-M12-06: conflicts recorded, surfaced, and resolved by precedence."""
+        a, b = f"KG-CA-{uuid.uuid4().hex[:6]}", f"KG-CB-{uuid.uuid4().hex[:6]}"
+        r = await client.post(
+            "/v1/kg/conflicts",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"rule_a": a, "rule_b": b, "note": "both fire on late plant"},
+        )
+        assert r.status_code == 200, r.text
+        conflict = r.json()
+        assert conflict["resolved"] is False  # no precedence yet
+
+        r = await client.get(
+            "/v1/kg/conflicts?unresolved=true", headers=_headers(REVIEWER, roles.RULE_REVIEWER)
+        )
+        assert any(c["rule_a"] == a for c in r.json())
+
+        r = await client.post(
+            f"/v1/kg/conflicts/{conflict['id']}/resolve",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"precedence": a},
+        )
+        assert r.status_code == 200 and r.json()["resolved"] is True
+        assert r.json()["precedence"] == a
+
+    async def test_non_reviewer_cannot_record_a_conflict(self, client: httpx.AsyncClient) -> None:
+        r = await client.post(
+            "/v1/kg/conflicts",
+            headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+            json={"rule_a": "KG-X", "rule_b": "KG-Y"},
+        )
+        assert r.status_code == 403
+
+    async def test_confidence_adjustment_reflects_in_the_served_graph(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """FR-M12-08: an evidence adjustment updates the served (released) value."""
+        body = _marker_rule(uuid.uuid4().hex)
+        rule_id = body["rule_id"]
+        row_id = await _drive_to_approved(client, body)
+        await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": row_id},
+        )
+        r = await client.post(
+            f"/v1/kg/rules/{row_id}/confidence",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"confidence": 0.5, "reason": "new mocap evidence"},
+        )
+        assert r.status_code == 200 and r.json()["confidence"] == 0.5
+        # The served (RAG) value drifts with it; the version content is untouched.
+        r = await client.post(
+            "/internal/kg/query",
+            headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+            json={"rule_ids": [rule_id]},
+        )
+        assert r.json()["results"][0]["confidence"] == 0.5
+
+    async def test_export_returns_the_released_graph(self, client: httpx.AsyncClient) -> None:
+        body = _marker_rule(uuid.uuid4().hex)
+        rule_id = body["rule_id"]
+        row_id = await _drive_to_approved(client, body)
+        await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": row_id},
+        )
+        r = await client.get("/v1/kg/export", headers=_headers(REVIEWER, roles.RULE_REVIEWER))
+        assert r.status_code == 200
+        assert rule_id in [row["rule_id"] for row in r.json()]
