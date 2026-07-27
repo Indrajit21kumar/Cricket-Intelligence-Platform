@@ -41,6 +41,10 @@ class ReviewRequest(BaseModel):
     note: str | None = None
 
 
+class ReleaseRequest(BaseModel):
+    row_id: uuid.UUID = Field(..., description="the approved rule version to pin into the graph")
+
+
 class RuleResponse(BaseModel):
     id: uuid.UUID
     rule_id: str
@@ -126,6 +130,19 @@ async def review_rule(
         decision=body.decision,
         reviewer=str(principal.person_id),
         note=body.note,
+    )
+    return _to_response(row)
+
+
+@kg_router.post("/release", response_model=RuleResponse)
+async def release_rule(
+    body: ReleaseRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_role(*roles.KG_REVIEW_ROLES))],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> RuleResponse:
+    """Pin an approved rule into the served graph (immutable release)."""
+    row = await service.release_rule(
+        deps.session_factory, row_id=body.row_id, actor=str(principal.person_id)
     )
     return _to_response(row)
 

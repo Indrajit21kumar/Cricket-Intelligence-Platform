@@ -76,6 +76,16 @@ async def list_versions(session: AsyncSession, rule_id: str) -> list[dict[str, A
     return [dict(r) for r in rows]
 
 
+async def get_released(session: AsyncSession, rule_id: str) -> dict[str, Any] | None:
+    """The currently-released rule row for a rule_id (the served version), if any."""
+    query = (
+        f"SELECT {_COLUMNS} FROM rules "  # nosec B608
+        "WHERE rule_id = :rid AND status = 'released' ORDER BY version DESC LIMIT 1"
+    )
+    row = (await session.execute(text(query), {"rid": rule_id})).mappings().first()
+    return dict(row) if row else None
+
+
 async def update_content(session: AsyncSession, row_id: uuid.UUID, rule: Rule) -> dict[str, Any]:
     """Replace a draft's editable content (never its status/version)."""
     row = (

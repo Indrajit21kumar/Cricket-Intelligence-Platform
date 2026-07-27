@@ -189,3 +189,75 @@ class TestGovernanceNegatives:
     async def test_unauthenticated_is_rejected(self, client: httpx.AsyncClient) -> None:
         r = await client.post("/v1/kg/rules", json=_rule())
         assert r.status_code == 401
+
+
+async def _drive_to_approved(client: httpx.AsyncClient, body: dict[str, Any]) -> str:
+    """create (author) -> submit -> approve (reviewer); return the row id."""
+    r = await client.post("/v1/kg/rules", headers=_headers(AUTHOR, roles.RULE_AUTHOR), json=body)
+    row_id = r.json()["id"]
+    await client.patch(
+        f"/v1/kg/rules/{row_id}", headers=_headers(AUTHOR, roles.RULE_AUTHOR), json={"submit": True}
+    )
+    await client.post(
+        f"/v1/kg/rules/{row_id}/review",
+        headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+        json={"decision": "approve"},
+    )
+    return str(row_id)
+
+
+class TestRelease:
+    async def test_approved_rule_can_be_released(self, client: httpx.AsyncClient) -> None:
+        """AC-M12-02 (positive): an approved rule reaches the served graph."""
+        row_id = await _drive_to_approved(client, _rule())
+        r = await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": row_id},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["status"] == "released"
+
+    async def test_a_draft_cannot_be_released(self, client: httpx.AsyncClient) -> None:
+        """AC-M12-02: only an approved rule may be released, never a draft."""
+        r = await client.post(
+            "/v1/kg/rules", headers=_headers(AUTHOR, roles.RULE_AUTHOR), json=_rule()
+        )
+        row_id = r.json()["id"]
+        r = await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": row_id},
+        )
+        assert r.status_code == 409, r.text
+
+    async def test_release_requires_reviewer_role(self, client: httpx.AsyncClient) -> None:
+        row_id = await _drive_to_approved(client, _rule())
+        r = await client.post(
+            "/v1/kg/release", headers=_headers(AUTHOR, roles.RULE_AUTHOR), json={"row_id": row_id}
+        )
+        assert r.status_code == 403
+
+    async def test_releasing_a_new_version_supersedes_the_old(
+        self, client: httpx.AsyncClient
+    ) -> None:
+        """AC-M12-03: the old version remains (superseded) for reproduction."""
+        rule_id = f"KG-SUP-{uuid.uuid4().hex[:6].upper()}"
+        v1 = {**_rule(), "rule_id": rule_id, "version": 1}
+        v1_id = await _drive_to_approved(client, v1)
+        await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": v1_id},
+        )
+        v2 = {**_rule(), "rule_id": rule_id, "version": 2}
+        v2_id = await _drive_to_approved(client, v2)
+        await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": v2_id},
+        )
+
+        r = await client.get(f"/v1/kg/rules/{rule_id}", headers=_headers(AUTHOR, roles.RULE_AUTHOR))
+        by_version = {v["version"]: v["status"] for v in r.json()["versions"]}
+        assert by_version == {1: "superseded", 2: "released"}

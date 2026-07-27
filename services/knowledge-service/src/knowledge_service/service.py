@@ -22,14 +22,31 @@ from sqlalchemy.ext.asyncio import async_sessionmaker
 
 from cip_core import Conflict, Forbidden, NotFound, Unprocessable, audit_record
 from cip_data import admin_session
-from knowledge_service.domain import rules_repo
+from knowledge_service.domain import rules_repo, versions_repo
 from knowledge_service.domain.lifecycle import (
     STATUS_APPROVED,
     STATUS_DRAFT,
     STATUS_IN_REVIEW,
+    STATUS_RELEASED,
+    STATUS_SUPERSEDED,
     can_transition,
 )
 from knowledge_service.domain.rule_schema import RuleValidationError, validate_rule
+
+
+def _snapshot(row: dict[str, Any]) -> dict[str, Any]:
+    """The frozen, citable content of a rule row (no mutable governance fields)."""
+    return {
+        "rule_id": row["rule_id"],
+        "version": row["version"],
+        "conditions": row["conditions"],
+        "fault": row["fault"],
+        "cause": row["cause"],
+        "risk": row["risk"],
+        "drill": row["drill"],
+        "confidence": row["confidence"],
+    }
+
 
 DECISION_APPROVE = "approve"
 DECISION_REQUEST_CHANGES = "request_changes"
@@ -160,6 +177,53 @@ async def review(
             entity=f"rule:{current['rule_id']}:v{current['version']}",
             actor=reviewer,
             meta={"row_id": str(row_id), "decision": decision, "note": note, "result": target},
+        )
+    return row
+
+
+async def release_rule(
+    session_factory: async_sessionmaker[Any], *, row_id: Any, actor: str
+) -> dict[str, Any]:
+    """Pin an approved rule into the served graph (§12).
+
+    Freezes the rule's content as an immutable ``rule_versions`` snapshot and
+    flips its ``released`` pin. Any previously-released version of the same
+    rule_id is superseded ATOMICALLY (its status -> superseded, its snapshot pin
+    cleared) so the served graph never has two live versions of one rule — no
+    mid-analysis drift (NFR-M12-02). The old snapshot stays for reproduction.
+    """
+    async with admin_session(session_factory) as session:
+        current = await rules_repo.get_by_id(session, row_id)
+        if current is None:
+            raise NotFound("rule not found")
+        if not can_transition(current["status"], STATUS_RELEASED):
+            raise Conflict(f"only an approved rule can be released (status is {current['status']})")
+
+        # Supersede the outgoing released version of this rule_id, if any.
+        previous = await rules_repo.get_released(session, current["rule_id"])
+        if previous is not None and previous["id"] != current["id"]:
+            await rules_repo.set_status(session, previous["id"], STATUS_SUPERSEDED)
+            await versions_repo.mark_unreleased(
+                session, rule_id=previous["rule_id"], version=previous["version"]
+            )
+
+        await versions_repo.freeze_snapshot(
+            session,
+            rule_id=current["rule_id"],
+            version=current["version"],
+            snapshot=_snapshot(current),
+            released=True,
+        )
+        row = await rules_repo.set_status(session, row_id, STATUS_RELEASED)
+        await audit_record(
+            session,
+            action="kg.rule.released",
+            entity=f"rule:{current['rule_id']}:v{current['version']}",
+            actor=actor,
+            meta={
+                "row_id": str(row_id),
+                "superseded": str(previous["id"]) if previous else None,
+            },
         )
     return row
 
