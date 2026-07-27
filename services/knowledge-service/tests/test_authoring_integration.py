@@ -315,3 +315,35 @@ class TestMatchServing:
         )
         assert r.status_code == 200
         assert marker not in [m["rule_id"] for m in r.json()["matched"]]
+
+
+class TestRagServing:
+    async def test_released_rule_grounds_with_citation(self, client: httpx.AsyncClient) -> None:
+        """AC-M12-05: RAG results carry rule_id/version citations."""
+        body = _marker_rule(uuid.uuid4().hex)
+        rule_id = body["rule_id"]
+        row_id = await _drive_to_approved(client, body)
+        await client.post(
+            "/v1/kg/release",
+            headers=_headers(REVIEWER, roles.RULE_REVIEWER),
+            json={"row_id": row_id},
+        )
+        r = await client.post(
+            "/internal/kg/query",
+            headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+            json={"rule_ids": [rule_id]},
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["count"] == 1
+        assert r.json()["results"][0]["citation"] == {"rule_id": rule_id, "version": 1}
+
+    async def test_unreleased_rule_is_not_grounded(self, client: httpx.AsyncClient) -> None:
+        body = _marker_rule(uuid.uuid4().hex)
+        await _drive_to_approved(client, body)  # approved, NOT released
+        r = await client.post(
+            "/internal/kg/query",
+            headers=_headers(AUTHOR, roles.RULE_AUTHOR),
+            json={"rule_ids": [body["rule_id"]]},
+        )
+        assert r.status_code == 200
+        assert r.json()["count"] == 0

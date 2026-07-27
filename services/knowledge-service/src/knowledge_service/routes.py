@@ -173,6 +173,26 @@ async def match_rules(
     return MatchResponse(matched=matched, count=len(matched))
 
 
+class QueryResponse(BaseModel):
+    results: list[dict[str, Any]]
+    count: int
+
+
+@internal_router.post("/query", response_model=QueryResponse)
+async def query_knowledge(
+    query: dict[str, Any],
+    _principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> QueryResponse:
+    """RAG grounding for M14: released knowledge + rule_id/version citations.
+
+    Draws only from the released graph, so the AI coach can never cite a draft
+    (AC-M12-05, ENG-005).
+    """
+    results = await service.query_knowledge(deps.session_factory, query_payload=query)
+    return QueryResponse(results=results, count=len(results))
+
+
 @kg_router.get("/rules/{rule_id}", response_model=RuleHistoryResponse)
 async def read_rule(
     rule_id: str,
