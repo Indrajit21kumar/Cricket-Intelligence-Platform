@@ -83,6 +83,9 @@ class MatchedRule:
     #: Book 10 evidence (tier, validated_by, sources, contradicts_tradition),
     #: so M13 can weigh and cite the rule's credibility.
     evidence: dict[str, Any]
+    #: The rule's conditions, so M13 can link a finding to the exact metrics that
+    #: triggered it (its evidence metric ids, AC-M13-02).
+    conditions: list[dict[str, Any]]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -94,6 +97,7 @@ class MatchedRule:
             "risk": self.risk,
             "drill": self.drill,
             "evidence": self.evidence,
+            "conditions": self.conditions,
         }
 
 
@@ -161,6 +165,7 @@ def select_matches(
                     risk=snapshot.get("risk", {}),
                     drill=snapshot.get("drill", {}),
                     evidence=snapshot.get("evidence", {}),
+                    conditions=list(conditions),
                 )
             )
     # Highest-confidence first; None confidence sinks to the bottom.
