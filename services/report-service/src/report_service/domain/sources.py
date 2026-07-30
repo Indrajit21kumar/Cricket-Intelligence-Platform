@@ -13,12 +13,18 @@ logic be built and tested now.
   comparison view (Step 4). M15 does not exist as a built service yet (only
   its spec), so this is a fan-in read keyed by correlation_id, same as the
   other cross-module fetches in this build.
+- :class:`MetricsSource` — M10 biomechanics + M11 physics metrics for a
+  stroke (Step 8), fetched by correlation_id the same way M13's FactSource
+  fetched them for reasoning.
+- :class:`VideoArtefactSource` — the M05 clip ref + M06/M07 pose/bat artefact
+  refs + M09 phase boundaries a stroke needs for annotated-video rendering
+  (Step 8).
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 
@@ -67,3 +73,59 @@ class FakeLegendSource:
 
     async def load(self, correlation_id: str) -> Mapping[str, Any] | None:
         return self.comparisons.get(correlation_id)
+
+
+@dataclass(frozen=True, slots=True)
+class MetricsBundle:
+    """The M10 biomechanics + M11 physics metrics for one stroke."""
+
+    biomechanics: dict[str, Any] = field(default_factory=dict)
+    physics: dict[str, Any] | None = None
+
+
+class MetricsSource(Protocol):
+    async def load(self, correlation_id: str) -> MetricsBundle:
+        """M10/M11 metrics for this stroke; empty biomechanics if not yet available."""
+        ...
+
+
+class FakeMetricsSource:
+    """In-process metrics source holding fixtures for dev + tests."""
+
+    def __init__(self) -> None:
+        self.bundles: dict[str, MetricsBundle] = {}
+
+    def set_metrics(self, correlation_id: str, bundle: MetricsBundle) -> None:
+        self.bundles[correlation_id] = bundle
+
+    async def load(self, correlation_id: str) -> MetricsBundle:
+        return self.bundles.get(correlation_id, MetricsBundle())
+
+
+@dataclass(frozen=True, slots=True)
+class VideoArtefacts:
+    """What Step 3's video rendering needs for one stroke."""
+
+    clip_ref: str
+    pose_artefact_ref: str | None
+    bat_artefact_ref: str | None
+    phases: dict[str, int] = field(default_factory=dict)
+
+
+class VideoArtefactSource(Protocol):
+    async def load(self, correlation_id: str) -> VideoArtefacts | None:
+        """The clip + pose/bat artefact refs + phases for this stroke, or None."""
+        ...
+
+
+class FakeVideoArtefactSource:
+    """In-process video-artefact source holding fixtures for dev + tests."""
+
+    def __init__(self) -> None:
+        self.artefacts: dict[str, VideoArtefacts] = {}
+
+    def set_artefacts(self, correlation_id: str, artefacts: VideoArtefacts) -> None:
+        self.artefacts[correlation_id] = artefacts
+
+    async def load(self, correlation_id: str) -> VideoArtefacts | None:
+        return self.artefacts.get(correlation_id)

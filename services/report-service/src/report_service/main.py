@@ -6,8 +6,7 @@
 4. In the lifespan, build/stash the runtime :class:`Deps`.
 5. Mount routers.
 
-In Step 1 the service exposes only the health + version surface; the report +
-coach routes mount from Step 8.
+Report + coach routes mount from Step 8, alongside health + version.
 """
 
 from __future__ import annotations
@@ -23,6 +22,7 @@ from report_service import __version__
 from report_service.deps import build_deps, shutdown_deps
 from report_service.health import router as health_router
 from report_service.health import version_router
+from report_service.routes import coach_router, reports_router
 from report_service.settings import get_service_settings
 
 
@@ -58,6 +58,8 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(version_router)
+    app.include_router(reports_router)
+    app.include_router(coach_router)
 
     return app
 

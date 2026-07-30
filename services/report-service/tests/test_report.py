@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
-from report_service.domain.narrative import Narrative
+from report_service.domain.evidence import build_evidence
+from report_service.domain.narrative import FakeLLMClient, Narrative, build_narrative
 from report_service.domain.report import attach_narrative, build_report
 
 
@@ -124,3 +126,19 @@ class TestBuildReport:
         assert updated.narrative_text == narrative.text
         assert updated.narrative_citations == ("KG-A@v1",)
         assert report.narrative_text is None  # original is unchanged (frozen dataclass)
+
+    def test_full_pipeline_is_reproducible_end_to_end(self) -> None:
+        """AC-M14-07, whole-pipeline: build_report + evidence + narrative twice
+        from the same inputs yields the same structured claims, not just the
+        same scores/findings (test_reproducible_same_inputs_same_report covers
+        that narrower case)."""
+
+        async def _run() -> dict[str, Any]:
+            report = build_report(reasoned=_reasoned(), biomechanics=_bio())
+            evidence = build_evidence(findings=report.findings, legend_view=report.legend_view)
+            narrative = await build_narrative(evidence, FakeLLMClient())
+            return attach_narrative(report, narrative).to_dict()
+
+        a = asyncio.run(_run())
+        b = asyncio.run(_run())
+        assert a == b

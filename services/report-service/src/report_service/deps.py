@@ -2,8 +2,9 @@
 
 Everything that needs an open connection (DB engine, Kafka bus, Redis client)
 is built in :func:`build_deps` at startup and shut down in :func:`shutdown_deps`.
-The evidence/knowledge/LLM/legend/video/entitlement sources that feed report
-assembly are added across Steps 2-7.
+Every cross-service source is a Fake for now (Step 8) — no service in this
+build has a real HTTP client wired for any of these adapters yet; swapping
+one in later only touches this function.
 """
 
 from __future__ import annotations
@@ -15,6 +16,20 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
+from report_service.domain.coach import CoachLLMClient, FakeCoachLLMClient
+from report_service.domain.entitlement import EntitlementClient, FakeEntitlementClient
+from report_service.domain.narrative import FakeLLMClient, LLMClient
+from report_service.domain.sources import (
+    FakeHistorySource,
+    FakeLegendSource,
+    FakeMetricsSource,
+    FakeVideoArtefactSource,
+    HistorySource,
+    LegendSource,
+    MetricsSource,
+    VideoArtefactSource,
+)
+from report_service.domain.video import FakeVideoAnnotator, VideoAnnotator
 from report_service.settings import ServiceSettings
 
 
@@ -27,6 +42,14 @@ class Deps:
     session_factory: async_sessionmaker[AsyncSession]
     event_bus: KafkaEventBus
     idempotency_store: RedisIdempotencyStore
+    metrics_source: MetricsSource
+    history_source: HistorySource
+    legend_source: LegendSource
+    video_source: VideoArtefactSource
+    video_annotator: VideoAnnotator
+    llm: LLMClient
+    coach_llm: CoachLLMClient
+    entitlement: EntitlementClient
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -42,6 +65,14 @@ async def build_deps(settings: ServiceSettings) -> Deps:
         session_factory=session_factory,
         event_bus=event_bus,
         idempotency_store=idempotency_store,
+        metrics_source=FakeMetricsSource(),
+        history_source=FakeHistorySource(),
+        legend_source=FakeLegendSource(),
+        video_source=FakeVideoArtefactSource(),
+        video_annotator=FakeVideoAnnotator(),
+        llm=FakeLLMClient(),
+        coach_llm=FakeCoachLLMClient(),
+        entitlement=FakeEntitlementClient(),
     )
 
 
