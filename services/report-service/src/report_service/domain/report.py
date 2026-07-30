@@ -14,12 +14,13 @@ always assembles the same report (NFR-M14-03, AC-M14-07).
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from report_service.domain.panels import MetricPanelEntry, build_metric_panels
 from report_service.domain.scoring import Scores, compute_improvement, compute_scores
 from report_service.domain.sources import PlayerHistory
+from report_service.domain.video import AnnotatedVideo
 
 SCHEMA_VERSION = "report.structure/1.0"
 
@@ -36,8 +37,10 @@ class ReportStructure:
     scores: Scores
     match_risk: dict[str, Any]
     provisional: bool
-    #: Filled in by Step 3 (video) / Step 4 (legend); None until then.
+    #: Filled in by Step 3 (video) / Step 4 (legend); None/empty until then.
     annotated_video_ref: str | None = None
+    video_markers: tuple[dict[str, Any], ...] = ()
+    video_overlays_applied: bool = False
     legend_view: dict[str, Any] | None = None
     schema_version: str = SCHEMA_VERSION
 
@@ -54,6 +57,8 @@ class ReportStructure:
             "match_risk": self.match_risk,
             "provisional": self.provisional,
             "annotated_video_ref": self.annotated_video_ref,
+            "video_markers": list(self.video_markers),
+            "video_overlays_applied": self.video_overlays_applied,
             "legend_view": self.legend_view,
             "schema_version": self.schema_version,
         }
@@ -104,4 +109,14 @@ def build_report(
         scores=scores,
         match_risk=match_risk if isinstance(match_risk, dict) else {},
         provisional=bool(reasoned.get("provisional", False)),
+    )
+
+
+def attach_video(report: ReportStructure, video: AnnotatedVideo) -> ReportStructure:
+    """Fill in the report's annotated-video section (Step 3)."""
+    return replace(
+        report,
+        annotated_video_ref=video.video_ref,
+        video_markers=tuple(m.to_dict() for m in video.markers),
+        video_overlays_applied=video.overlays_applied,
     )
