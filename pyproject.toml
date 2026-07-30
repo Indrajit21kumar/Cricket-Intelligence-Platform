@@ -90,6 +90,7 @@ known-first-party = [
     "physics_service",
     "knowledge_service",
     "reasoning_service",
+    "report_service",
 ]
 
 [tool.ruff.format]
