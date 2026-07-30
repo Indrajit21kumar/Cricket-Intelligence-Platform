@@ -11,8 +11,7 @@ Every CIP service follows this shape:
    exit.
 5. Mount routers.
 
-In Step 1 the service exposes only the health + version surface; the
-recompute route mounts from Step 7.
+The recompute route mounts alongside health + version.
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ from dna_service import __version__
 from dna_service.deps import build_deps, shutdown_deps
 from dna_service.health import router as health_router
 from dna_service.health import version_router
+from dna_service.routes import internal_router
 from dna_service.settings import get_service_settings
 
 
@@ -64,6 +64,7 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(version_router)
+    app.include_router(internal_router)
 
     return app
 

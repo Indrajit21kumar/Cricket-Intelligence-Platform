@@ -104,3 +104,16 @@ class TestEMAUpdate:
         assert result.prior_value == 70.0
         assert result.prior_confidence == 0.6
         assert result.evidence_confidence == 0.9
+
+    def test_result_retains_the_raw_evidence_value_not_just_the_blended_one(self) -> None:
+        """A persisted run log needs the raw evidence to be replayable later
+        (Step 6's recompute_traits), not just the blended new_value."""
+        result = update_trait(
+            trait_key="trait.balance",
+            prior_value=70.0,
+            prior_confidence=0.6,
+            evidence_value=90.0,
+            evidence_confidence=0.9,
+        )
+        assert result.evidence_value == 90.0
+        assert result.evidence_value != result.new_value

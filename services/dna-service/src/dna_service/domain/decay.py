@@ -37,13 +37,21 @@ MODEL_VERSION = "dna-update-1.0.0"
 
 @dataclass(frozen=True, slots=True)
 class TraitUpdateResult:
-    """The outcome of blending one session's evidence into a trait."""
+    """The outcome of blending one session's evidence into a trait.
+
+    Retains the raw ``evidence_value``/``evidence_confidence`` (not just the
+    blended ``new_value``) so a persisted run log carries everything needed
+    to reconstruct the evidence sequence later for a genuine replay
+    (Step 6's ``recompute_traits``) — a log that only kept the blended
+    output couldn't be replayed, only re-displayed.
+    """
 
     trait_key: str
     prior_value: float | None
     new_value: float
     prior_confidence: float | None
     new_confidence: float
+    evidence_value: float
     evidence_confidence: float
     model_version: str = MODEL_VERSION
 
@@ -54,6 +62,7 @@ class TraitUpdateResult:
             "new_value": self.new_value,
             "prior_confidence": self.prior_confidence,
             "new_confidence": self.new_confidence,
+            "evidence_value": self.evidence_value,
             "evidence_confidence": self.evidence_confidence,
             "model_version": self.model_version,
         }
@@ -78,6 +87,7 @@ def update_trait(
             new_value=evidence_value,
             prior_confidence=None,
             new_confidence=evidence_confidence,
+            evidence_value=evidence_value,
             evidence_confidence=evidence_confidence,
         )
 
@@ -93,5 +103,6 @@ def update_trait(
         new_value=new_value,
         prior_confidence=prior_confidence,
         new_confidence=new_confidence,
+        evidence_value=evidence_value,
         evidence_confidence=evidence_confidence,
     )
