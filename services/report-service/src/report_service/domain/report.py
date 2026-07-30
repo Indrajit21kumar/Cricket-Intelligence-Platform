@@ -2,10 +2,10 @@
 
 Assembles the report Section 5 defines from M13's ``analysis.reasoned`` (+
 M10/M11 metrics + player history + M15 legend comparison): scores, findings,
-metric panels, and the Legend view. Video annotation (Step 3) is attached
-separately via :func:`attach_video`, since rendering it requires calling the
-:class:`~report_service.domain.video.VideoAnnotator` adapter; narrative
-(Step 5) and the AI Coach (Step 6) read this structure rather than
+metric panels, and the Legend view. Video annotation (Step 3) and the
+grounded narrative (Step 5) are attached separately via :func:`attach_video`
+and :func:`attach_narrative`, since both require an async call to their
+respective adapter; the AI Coach (Step 6) reads this structure rather than
 recomputing any of it, so every number in the report traces to exactly one
 place.
 
@@ -20,6 +20,7 @@ from dataclasses import dataclass, replace
 from typing import Any
 
 from report_service.domain.legend import build_legend_view
+from report_service.domain.narrative import Narrative
 from report_service.domain.panels import MetricPanelEntry, build_metric_panels
 from report_service.domain.scoring import Scores, compute_improvement, compute_scores
 from report_service.domain.sources import PlayerHistory
@@ -45,6 +46,9 @@ class ReportStructure:
     video_markers: tuple[dict[str, Any], ...] = ()
     video_overlays_applied: bool = False
     legend_view: dict[str, Any] | None = None
+    #: Filled in by attach_narrative() after build_report(); None until then.
+    narrative_text: str | None = None
+    narrative_citations: tuple[str, ...] = ()
     schema_version: str = SCHEMA_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -63,6 +67,8 @@ class ReportStructure:
             "video_markers": list(self.video_markers),
             "video_overlays_applied": self.video_overlays_applied,
             "legend_view": self.legend_view,
+            "narrative_text": self.narrative_text,
+            "narrative_citations": list(self.narrative_citations),
             "schema_version": self.schema_version,
         }
 
@@ -131,4 +137,13 @@ def attach_video(report: ReportStructure, video: AnnotatedVideo) -> ReportStruct
         annotated_video_ref=video.video_ref,
         video_markers=tuple(m.to_dict() for m in video.markers),
         video_overlays_applied=video.overlays_applied,
+    )
+
+
+def attach_narrative(report: ReportStructure, narrative: Narrative) -> ReportStructure:
+    """Fill in the report's grounded narrative (Step 5)."""
+    return replace(
+        report,
+        narrative_text=narrative.text,
+        narrative_citations=narrative.citations,
     )

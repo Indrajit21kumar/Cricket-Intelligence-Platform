@@ -4,7 +4,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from report_service.domain.report import build_report
+from report_service.domain.narrative import Narrative
+from report_service.domain.report import attach_narrative, build_report
 
 
 def _reasoned() -> dict[str, Any]:
@@ -110,3 +111,16 @@ class TestBuildReport:
         assert report.legend_view is not None
         assert report.legend_view["styles"][0]["similarity"] == 72.0
         assert "endorse" in report.legend_view["disclaimer"].lower()
+
+    def test_narrative_is_none_until_attach_narrative_runs(self) -> None:
+        report = build_report(reasoned=_reasoned(), biomechanics=_bio())
+        assert report.narrative_text is None
+        assert report.narrative_citations == ()
+
+    def test_attach_narrative_fills_in_text_and_citations(self) -> None:
+        report = build_report(reasoned=_reasoned(), biomechanics=_bio())
+        narrative = Narrative(text="head falling outside off [KG-A@v1]", citations=("KG-A@v1",))
+        updated = attach_narrative(report, narrative)
+        assert updated.narrative_text == narrative.text
+        assert updated.narrative_citations == ("KG-A@v1",)
+        assert report.narrative_text is None  # original is unchanged (frozen dataclass)
