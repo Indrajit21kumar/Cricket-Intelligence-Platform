@@ -11,8 +11,7 @@ Every CIP service follows this shape:
    exit.
 5. Mount routers.
 
-In Step 1 the service exposes only the health + version surface; the compare
-+ profile routes mount from Step 7.
+Compare + profile routes mount from Step 7, alongside health + version.
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ from benchmark_service import __version__
 from benchmark_service.deps import build_deps, shutdown_deps
 from benchmark_service.health import router as health_router
 from benchmark_service.health import version_router
+from benchmark_service.routes import benchmarks_router, internal_router
 from benchmark_service.settings import get_service_settings
 
 
@@ -64,6 +64,8 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(version_router)
+    app.include_router(benchmarks_router)
+    app.include_router(internal_router)
 
     return app
 
