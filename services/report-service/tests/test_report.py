@@ -84,3 +84,29 @@ class TestBuildReport:
         reasoned = {**_reasoned(), "findings": []}
         report = build_report(reasoned=reasoned, biomechanics=_bio())
         assert report.scores.overall.value == 100.0
+
+    def test_legend_comparison_is_rendered_when_m15_has_produced_one(self) -> None:
+        legend_comparison = {
+            "styles": [
+                {
+                    "style_label": "cover-drive-style-A",
+                    "similarity": 72.0,
+                    "driving_gaps": [
+                        {
+                            "metric_id": "BM-01",
+                            "description": "backlift starts later than the benchmark",
+                            "player_value": 12.0,
+                            "benchmark_value": 8.0,
+                        }
+                    ],
+                    "confidence": 0.8,
+                }
+            ],
+            "benchmark_version": "cibl@1",
+        }
+        report = build_report(
+            reasoned=_reasoned(), biomechanics=_bio(), legend_comparison=legend_comparison
+        )
+        assert report.legend_view is not None
+        assert report.legend_view["styles"][0]["similarity"] == 72.0
+        assert "endorse" in report.legend_view["disclaimer"].lower()

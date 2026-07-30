@@ -1,14 +1,16 @@
 """Report assembly — the structured coaching report (M14 §5, Step 2, FR-M14-01).
 
 Assembles the report Section 5 defines from M13's ``analysis.reasoned`` (+
-M10/M11 metrics + player history): scores, findings, and metric panels. Video
-annotation (Step 3) and the Legend view (Step 4) are added by later steps;
-narrative (Step 5) and the AI Coach (Step 6) read this structure rather than
+M10/M11 metrics + player history + M15 legend comparison): scores, findings,
+metric panels, and the Legend view. Video annotation (Step 3) is attached
+separately via :func:`attach_video`, since rendering it requires calling the
+:class:`~report_service.domain.video.VideoAnnotator` adapter; narrative
+(Step 5) and the AI Coach (Step 6) read this structure rather than
 recomputing any of it, so every number in the report traces to exactly one
 place.
 
 Pure function of its inputs: the same ``analysis.reasoned`` + metrics + history
-always assembles the same report (NFR-M14-03, AC-M14-07).
++ legend comparison always assembles the same report (NFR-M14-03, AC-M14-07).
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from typing import Any
 
+from report_service.domain.legend import build_legend_view
 from report_service.domain.panels import MetricPanelEntry, build_metric_panels
 from report_service.domain.scoring import Scores, compute_improvement, compute_scores
 from report_service.domain.sources import PlayerHistory
@@ -37,7 +40,7 @@ class ReportStructure:
     scores: Scores
     match_risk: dict[str, Any]
     provisional: bool
-    #: Filled in by Step 3 (video) / Step 4 (legend); None/empty until then.
+    #: Filled in by attach_video() after build_report(); None/empty until then.
     annotated_video_ref: str | None = None
     video_markers: tuple[dict[str, Any], ...] = ()
     video_overlays_applied: bool = False
@@ -85,8 +88,15 @@ def build_report(
     biomechanics: Mapping[str, Any],
     physics: Mapping[str, Any] | None = None,
     history: Sequence[PlayerHistory] = (),
+    legend_comparison: Mapping[str, Any] | None = None,
 ) -> ReportStructure:
-    """Assemble the report structure from analysis.reasoned + metrics + history."""
+    """Assemble the report structure from analysis.reasoned + metrics + history.
+
+    ``legend_comparison`` is M15's ``benchmark.compared`` payload (via
+    :class:`~report_service.domain.sources.LegendSource`), or None when M15
+    has not produced one yet — the legend section is honestly omitted rather
+    than faked.
+    """
     findings = reasoned.get("findings", [])
     findings = findings if isinstance(findings, list) else []
 
@@ -97,6 +107,7 @@ def build_report(
     scores = compute_scores(findings, _facts_map(biomechanics, physics), improvement=improvement)
 
     match_risk = reasoned.get("match_risk", {})
+    legend_view = build_legend_view(legend_comparison)
 
     return ReportStructure(
         correlation_id=str(reasoned.get("correlation_id", "")),
@@ -109,6 +120,7 @@ def build_report(
         scores=scores,
         match_risk=match_risk if isinstance(match_risk, dict) else {},
         provisional=bool(reasoned.get("provisional", False)),
+        legend_view=legend_view.to_dict() if legend_view is not None else None,
     )
 
 
