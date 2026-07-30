@@ -26,12 +26,18 @@ client's output can never reach the player as an answer.
 from __future__ import annotations
 
 import re
+import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from report_service.domain.entitlement import EntitlementClient
 from report_service.domain.evidence import EvidenceChunk
 from report_service.domain.narrative import UngroundedNarrativeError
+
+NOT_ENTITLED_MESSAGE = (
+    "The AI Coach is a Pro feature. Upgrade your plan to unlock grounded Q&A on your reports."
+)
 
 DEFER_MESSAGE = (
     "I don't have enough evidence from your reports to answer that yet. "
@@ -137,3 +143,51 @@ async def ask(question: str, evidence: Sequence[EvidenceChunk], llm: CoachLLMCli
         return CoachAnswer(text=DEFER_MESSAGE, citations=(), deferred=True)
 
     return CoachAnswer(text=text, citations=tuple(sorted(cited)), deferred=False)
+
+
+@dataclass(frozen=True, slots=True)
+class CoachGateResult:
+    """The outcome of an entitlement-gated, cost-metered coach interaction."""
+
+    allowed: bool
+    denial_reason: str | None
+    answer: CoachAnswer | None
+    metered: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "allowed": self.allowed,
+            "denial_reason": self.denial_reason,
+            "answer": self.answer.to_dict() if self.answer is not None else None,
+            "metered": self.metered,
+        }
+
+
+async def ask_gated(
+    *,
+    tenant_id: uuid.UUID,
+    question: str,
+    evidence: Sequence[EvidenceChunk],
+    llm: CoachLLMClient,
+    entitlement: EntitlementClient,
+    idempotency_key: str,
+) -> CoachGateResult:
+    """Entitlement-gate + cost-meter :func:`ask` (FR-M14-10, NFR-M14-04, AC-M14-06).
+
+    Denies before any LLM call when the tenant's plan lacks the AI Coach
+    (Pro feature). Meters once per entitled question — deferred or answered —
+    since retrieval + the grounding check are real work either way; the
+    metering call is idempotent on ``idempotency_key`` so a retried request
+    is never double-billed.
+    """
+    decision = await entitlement.check_ai_coach_entitlement(tenant_id=tenant_id)
+    if not decision.allowed:
+        return CoachGateResult(
+            allowed=False, denial_reason=decision.reason, answer=None, metered=False
+        )
+
+    answer = await ask(question, evidence, llm)
+    metered = await entitlement.record_ai_coach_usage(
+        tenant_id=tenant_id, idempotency_key=idempotency_key
+    )
+    return CoachGateResult(allowed=True, denial_reason=None, answer=answer, metered=metered)

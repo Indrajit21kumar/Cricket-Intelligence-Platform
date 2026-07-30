@@ -9,6 +9,7 @@ guardrail.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from collections.abc import Sequence
 
 import pytest
@@ -17,10 +18,14 @@ from report_service.domain.coach import (
     DEFER_MESSAGE,
     FakeCoachLLMClient,
     ask,
+    ask_gated,
     retrieve,
 )
+from report_service.domain.entitlement import FakeEntitlementClient
 from report_service.domain.evidence import EvidenceChunk
 from report_service.domain.narrative import UngroundedNarrativeError
+
+_TENANT = uuid.uuid4()
 
 
 def _evidence() -> list[EvidenceChunk]:
@@ -137,3 +142,79 @@ class TestGroundingGuardrailIsCritical:
             )
         )
         assert answer.deferred is True
+
+
+class TestAskGated:
+    def test_denies_before_any_llm_call_when_not_entitled(self) -> None:
+        result = asyncio.run(
+            ask_gated(
+                tenant_id=_TENANT,
+                question="why does my head fall outside off?",
+                evidence=_evidence(),
+                llm=FakeCoachLLMClient(),
+                entitlement=FakeEntitlementClient(allowed=False),
+                idempotency_key="msg-1",
+            )
+        )
+        assert result.allowed is False
+        assert result.denial_reason == "ai_coach_not_entitled"
+        assert result.answer is None
+        assert result.metered is False
+
+    def test_entitled_question_is_answered_and_metered(self) -> None:
+        result = asyncio.run(
+            ask_gated(
+                tenant_id=_TENANT,
+                question="why does my head fall outside off?",
+                evidence=_evidence(),
+                llm=FakeCoachLLMClient(),
+                entitlement=FakeEntitlementClient(),
+                idempotency_key="msg-1",
+            )
+        )
+        assert result.allowed is True
+        assert result.answer is not None
+        assert result.answer.deferred is False
+        assert result.metered is True
+
+    def test_entitled_but_deferred_question_is_still_metered(self) -> None:
+        """Retrieval + the grounding check are real work even on a defer."""
+        result = asyncio.run(
+            ask_gated(
+                tenant_id=_TENANT,
+                question="what should I eat before a match?",
+                evidence=_evidence(),
+                llm=FakeCoachLLMClient(),
+                entitlement=FakeEntitlementClient(),
+                idempotency_key="msg-1",
+            )
+        )
+        assert result.answer is not None
+        assert result.answer.deferred is True
+        assert result.metered is True
+
+    def test_a_retried_request_is_not_double_metered(self) -> None:
+        entitlement = FakeEntitlementClient()
+        first = asyncio.run(
+            ask_gated(
+                tenant_id=_TENANT,
+                question="why does my head fall outside off?",
+                evidence=_evidence(),
+                llm=FakeCoachLLMClient(),
+                entitlement=entitlement,
+                idempotency_key="msg-1",
+            )
+        )
+        retried = asyncio.run(
+            ask_gated(
+                tenant_id=_TENANT,
+                question="why does my head fall outside off?",
+                evidence=_evidence(),
+                llm=FakeCoachLLMClient(),
+                entitlement=entitlement,
+                idempotency_key="msg-1",
+            )
+        )
+        assert first.metered is True
+        assert retried.metered is False
+        assert retried.answer is not None and retried.answer.deferred is False
