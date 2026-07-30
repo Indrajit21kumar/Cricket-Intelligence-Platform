@@ -41,6 +41,18 @@ _DECAY_PER_SPREAD = 50.0
 _SEVERITY_RANK = {OUTSIDE: 0, NEAR: 1, WITHIN: 2}
 
 
+class EndorsementGuardrailError(ValueError):
+    """Raised when a Legend Similarity figure would be emitted without driving gaps.
+
+    Book 0 SS11.2 / FR-M15-05 / AC-M15-04: a bare percentage is never
+    emitted. :func:`score_style` already never constructs an empty-gaps
+    result (Step 4's logic), but this makes it a hard, unbypassable
+    invariant of the dataclass itself (Step 6) rather than an emergent
+    property of one call site — the same structural pattern M14's
+    ``LegendStyleComparison`` uses for the identical guarantee.
+    """
+
+
 @dataclass(frozen=True, slots=True)
 class LegendStyleResult:
     """One style's similarity score — never without its driving comparisons."""
@@ -49,6 +61,13 @@ class LegendStyleResult:
     similarity: float
     driving_gaps: tuple[MetricComparison, ...]
     confidence: float | None
+
+    def __post_init__(self) -> None:
+        if not self.driving_gaps:
+            raise EndorsementGuardrailError(
+                "a Legend Similarity figure must never be emitted without its "
+                "driving gaps (Book 0 SS11.2 / FR-M15-05)"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return {

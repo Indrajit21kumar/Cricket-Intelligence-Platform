@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import pytest
+
+from benchmark_service.domain.comparison import MetricComparison
 from benchmark_service.domain.legend_similarity import (
+    EndorsementGuardrailError,
     LegendStyleResult,
     compute_legend_similarity,
     score_style,
@@ -103,6 +107,32 @@ class TestComputeLegendSimilarity:
     def test_uncomparable_styles_are_omitted_not_zero_scored(self) -> None:
         results = compute_legend_similarity({"BM-99": _fact(1.0)}, [_legend_profile()])
         assert results == []
+
+
+class TestEndorsementGuardrailStructural:
+    def test_constructing_a_result_without_driving_gaps_raises(self) -> None:
+        with pytest.raises(EndorsementGuardrailError):
+            LegendStyleResult(
+                style_label="cover-drive-style-A",
+                similarity=90.0,
+                driving_gaps=(),
+                confidence=0.9,
+            )
+
+    def test_a_result_with_gaps_constructs_fine(self) -> None:
+        gap = MetricComparison(
+            metric_id="BM-01",
+            value=6.0,
+            classification="within",
+            gap="BM-01 (6) is within the benchmark range (4-8).",
+            target_range=(4.0, 8.0),
+            confidence=0.9,
+            provenance="measured",
+        )
+        result = LegendStyleResult(
+            style_label="cover-drive-style-A", similarity=100.0, driving_gaps=(gap,), confidence=0.9
+        )
+        assert result.similarity == 100.0
 
     def test_every_result_carries_driving_gaps_never_a_bare_percentage(self) -> None:
         """FR-M15-05 / AC-M15-04, at the aggregate level."""
