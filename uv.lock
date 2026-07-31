@@ -4,6 +4,7 @@ requires-python = "==3.12.*"
 
 [manifest]
 members = [
+    "academy-service",
     "ball-service",
     "bat-service",
     "benchmark-service",
@@ -27,6 +28,29 @@ members = [
     "report-service",
     "shot-service",
     "video-service",
+]
+
+[[package]]
+name = "academy-service"
+version = "0.1.0"
+source = { editable = "services/academy-service" }
+dependencies = [
+    { name = "cip-core" },
+    { name = "cip-data" },
+    { name = "cip-events" },
+    { name = "cip-observability" },
+    { name = "fastapi" },
+    { name = "uvicorn", extra = ["standard"] },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "cip-core", editable = "libs/cip-core" },
+    { name = "cip-data", editable = "libs/cip-data" },
+    { name = "cip-events", editable = "libs/cip-events" },
+    { name = "cip-observability", editable = "libs/cip-observability" },
+    { name = "fastapi", specifier = ">=0.115" },
+    { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
 
 [[package]]
