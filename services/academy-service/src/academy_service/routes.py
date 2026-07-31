@@ -54,11 +54,15 @@ async def get_roster(
     tenant_id: uuid.UUID,
     _principal: Annotated[AuthenticatedPrincipal, Depends(_coaching)],
     deps: Annotated[Deps, Depends(get_deps)],
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
 ) -> list[RosterEntryResponse]:
+    """Paginated roster read (NFR-M18-01: MUST paginate at academy scale)."""
     entries = await service.list_roster(
         session_factory=deps.session_factory, roster_source=deps.roster_source, tenant_id=tenant_id
     )
-    return [RosterEntryResponse(**e.to_dict()) for e in entries]
+    page = entries[offset : offset + limit]
+    return [RosterEntryResponse(**e.to_dict()) for e in page]
 
 
 class AssignmentRequest(BaseModel):
