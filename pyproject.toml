@@ -93,6 +93,7 @@ known-first-party = [
     "report_service",
     "benchmark_service",
     "dna_service",
+    "learning_service",
 ]
 
 [tool.ruff.format]
