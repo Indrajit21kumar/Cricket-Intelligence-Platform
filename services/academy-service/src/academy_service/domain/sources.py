@@ -1,4 +1,4 @@
-"""Input source adapters (M18 Steps 2 + 4, §8).
+"""Input source adapters (M18 Steps 2, 4 + 5, §8).
 
 academy-service composes rosters and dashboards from several upstream
 reads. Each is a seam, following the "adapters + fakes, defer real infra"
@@ -19,6 +19,23 @@ ever made a real cross-service HTTP call (consistency over convenience).
   player (``TrainingPlan.to_dict()`` shape), or ``None`` when none is
   active. "Active" is M17's own persistence-layer concept
   (``plans_repo.get_active_plan``), not recomputed here.
+- :class:`CohortContextSource` — M04's ``skill_tier``/``age_band``
+  attributes for a player, the same fairness axes M15 already established
+  for benchmark selection (``benchmark_service.domain.sources.PlayerContext``)
+  — reused here rather than invented, since "fair" leaderboard grouping
+  means exactly what it means there.
+- :class:`PlayerInsightsSource` — M16's resolved recurring weak areas /
+  strengths for a player. M16's own ``dna.updated`` event payload already
+  carries the resolved list per trait (``traits_updated["weak.areas"]
+  ["recurring"]`` / ``traits_updated["trait.strengths"]["recurring"]`` —
+  see ``dna_service.domain.inference.InferenceResult.to_dict``); this
+  source stands in for the last such event observed per player, rather
+  than re-deriving the recurrence count from M04's raw stored trait value
+  (which would duplicate M16's own recurrence-threshold logic).
+- :class:`LeaderboardOptInSource` — whether a player has explicitly opted
+  in to appear on leaderboards (an M02-style consent read). Leaderboards
+  are opt-in only: absence of a recorded opt-in means excluded, never
+  defaulted to included.
 
 Every payload crossing one of these seams is an opaque ``Mapping[str,
 Any]`` — M18 composes it into a dashboard without interpreting or
@@ -117,3 +134,71 @@ class FakeActivePlanSource:
 
     async def load(self, person_id: str) -> Mapping[str, Any] | None:
         return self.plans.get(person_id)
+
+
+@dataclass(frozen=True, slots=True)
+class CohortContext:
+    """A player's fairness-grouping attributes, from M04."""
+
+    skill_tier: str | None = None
+    age_band: str | None = None
+
+
+class CohortContextSource(Protocol):
+    async def load(self, person_id: str) -> CohortContext:
+        """This player's skill_tier/age_band, or an all-None context if unset."""
+        ...
+
+
+class FakeCohortContextSource:
+    """In-process cohort-context source holding fixtures for dev + tests."""
+
+    def __init__(self) -> None:
+        self.contexts: dict[str, CohortContext] = {}
+
+    def set_context(self, person_id: str, context: CohortContext) -> None:
+        self.contexts[person_id] = context
+
+    async def load(self, person_id: str) -> CohortContext:
+        return self.contexts.get(person_id, CohortContext())
+
+
+class PlayerInsightsSource(Protocol):
+    async def load(self, person_id: str) -> Mapping[str, Any]:
+        """This player's resolved {"weak_areas": [...], "strengths": [...]}."""
+        ...
+
+
+class FakePlayerInsightsSource:
+    """In-process player-insights source holding fixtures for dev + tests."""
+
+    def __init__(self) -> None:
+        self.insights: dict[str, Mapping[str, Any]] = {}
+
+    def set_insights(self, person_id: str, insights: Mapping[str, Any]) -> None:
+        self.insights[person_id] = insights
+
+    async def load(self, person_id: str) -> Mapping[str, Any]:
+        return self.insights.get(person_id, {"weak_areas": [], "strengths": []})
+
+
+class LeaderboardOptInSource(Protocol):
+    async def load(self, person_id: str) -> bool:
+        """Whether this player has opted in to leaderboards; False if unrecorded."""
+        ...
+
+
+class FakeLeaderboardOptInSource:
+    """In-process leaderboard opt-in source holding fixtures for dev + tests."""
+
+    def __init__(self) -> None:
+        self.opted_in: set[str] = set()
+
+    def set_opt_in(self, person_id: str, *, opted_in: bool) -> None:
+        if opted_in:
+            self.opted_in.add(person_id)
+        else:
+            self.opted_in.discard(person_id)
+
+    async def load(self, person_id: str) -> bool:
+        return person_id in self.opted_in
