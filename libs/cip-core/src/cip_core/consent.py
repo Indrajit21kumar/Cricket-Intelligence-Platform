@@ -116,6 +116,56 @@ async def has_verified_guardianship(
     return result.first() is not None
 
 
+async def verified_guardians_of(
+    session: AsyncSession, *, minor_person_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """Every verified guardian recorded for this minor, or [] if none.
+
+    The reverse direction of :func:`has_verified_guardianship` (that checks
+    one candidate pairing; this lists all of them) — used by M19 to find
+    who a minor's notification should be guardian-mediated to (Book 0
+    §11.1), since a notification has no single "candidate reader" to test.
+    """
+    result = await session.execute(
+        text(
+            "SELECT guardian_person_id FROM guardianships "
+            "WHERE minor_person_id = :m AND verified = true"
+        ),
+        {"m": minor_person_id},
+    )
+    return [row[0] for row in result]
+
+
+@dataclass(frozen=True, slots=True)
+class ContactabilityInfo:
+    """Whether a person can be contacted right now, and whether they're a minor."""
+
+    is_contactable: bool
+    is_minor: bool
+
+
+async def contactability(session: AsyncSession, *, person_id: uuid.UUID) -> ContactabilityInfo:
+    """A person's basic contactability + minor status, from M02's own record.
+
+    M02 has no separate "email verified" flag — ``persons.status`` is the
+    single source of truth (``'active'`` means the account cleared email
+    verification and isn't suspended/deleted; see identity-service's own
+    verification flow). ``dob_band`` names minors explicitly. An unknown
+    person (deleted, or never existed) is conservatively NOT contactable —
+    deny by default, the same posture as :func:`check_profile_access`.
+    """
+    row = (
+        await session.execute(
+            text("SELECT status, dob_band FROM persons WHERE id = :pid"),
+            {"pid": person_id},
+        )
+    ).first()
+    if row is None:
+        return ContactabilityInfo(is_contactable=False, is_minor=False)
+    status, dob_band = row
+    return ContactabilityInfo(is_contactable=status == "active", is_minor=dob_band == "minor")
+
+
 async def shared_active_tenants(
     session: AsyncSession,
     *,

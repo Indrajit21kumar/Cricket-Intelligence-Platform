@@ -20,12 +20,15 @@ from cip_core.consent import (
     CONSENT_SHARING,
     CONSENT_TRAINING,
     AccessDecision,
+    ContactabilityInfo,
     TrainingConsentDecision,
     check_profile_access,
+    contactability,
     has_active_consent,
     has_verified_guardianship,
     may_use_for_training,
     shared_active_tenants,
+    verified_guardians_of,
 )
 from cip_core.context import (
     MissingTenantError,
@@ -94,6 +97,7 @@ __all__ = [
     "CIPError",
     "CIPErrorCode",
     "Conflict",
+    "ContactabilityInfo",
     "CorrelationAndTenantMiddleware",
     "CrossTenantAccess",
     "EnvSecretProvider",
@@ -119,6 +123,7 @@ __all__ = [
     "audit_record",
     "build_provider",
     "check_profile_access",
+    "contactability",
     "correlation_scope",
     "get_correlation_id",
     "get_settings",
@@ -136,5 +141,6 @@ __all__ = [
     "roles",
     "shared_active_tenants",
     "tenant_scope",
+    "verified_guardians_of",
     "verify_token",
 ]
