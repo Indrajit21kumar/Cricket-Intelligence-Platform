@@ -1,17 +1,23 @@
-"""Notification application service (M19 Steps 5 + 6).
+"""Notification application service (M19 Steps 5-7).
 
 Where every prior step's pure domain logic meets I/O: map the event
 (Step 2), check contactability/consent + gate on preferences/quiet hours
 (Step 4), idempotently create the notification row (Step 5), render +
 dispatch the message (Step 3), and record the delivery attempt's outcome
 under the retry/dead-letter policy (Step 5). Step 6 adds the inbox,
-preference updates, and provider delivery-status handling on top.
+preference updates, and provider delivery-status handling on top. Step 7
+audits every attempt of a TRANSACTIONAL send (FR-M19-08) — the
+verification/security/billing category §5 names as sensitive, not a
+notion invented here.
 
 A gated-out or unresolvable send is never persisted at all — the
 ``notifications`` table is "one row per send intent" (§9), and a send
 that was refused before dispatch was never a genuine intent. A
 re-delivered event that already produced a row is recognised via the
 idempotency key and returned as-is, never re-dispatched (FR-M19-07).
+Opt-out is immediate by construction, not a separate mechanism: Step 4's
+preference read happens fresh on every send, never cached, so the very
+next event after a PATCH /v1/preferences opt-out is already gated out.
 """
 
 from __future__ import annotations
@@ -23,11 +29,12 @@ from typing import Any
 
 from sqlalchemy.ext.asyncio import async_sessionmaker
 
-from cip_core import contactability, verified_guardians_of
+from cip_core import audit_record, contactability, verified_guardians_of
 from cip_data import admin_session
 from notification_service.domain import delivery_attempts_repo, notifications_repo
 from notification_service.domain.channels import EmailChannel, InAppChannel, PushChannel, dispatch
 from notification_service.domain.event_mapping import (
+    TRANSACTIONAL,
     UnmappedEventError,
     map_event,
     notification_type_by_key,
@@ -61,13 +68,17 @@ async def _attempt_delivery(
     email_channel: EmailChannel,
     push_channel: PushChannel,
     in_app_channel: InAppChannel,
+    is_sensitive: bool = False,
 ) -> str:
     """Dispatch one attempt, record it, and update the notification's status.
 
     Shared by :func:`send_notification` (attempt 1) and
     :func:`retry_notification` (attempt 2+) — the policy and bookkeeping
     are identical either way, only where the recipient/message came from
-    differs.
+    differs. ``is_sensitive`` audits this attempt (FR-M19-08) — every
+    attempt of a TRANSACTIONAL send, not just its first or its final
+    outcome, since each one is itself a sensitive action (a security/
+    billing message actually going out, or failing to).
     """
     async with admin_session(session_factory) as session:
         attempt_number = (
@@ -104,6 +115,19 @@ async def _attempt_delivery(
         await notifications_repo.update_status(
             session, notification_id=notification_id, status=outcome.notification_status
         )
+        if is_sensitive:
+            await audit_record(
+                session,
+                action=f"notification.{outcome.notification_status}",
+                entity=f"person:{recipient_ref}",
+                actor="notification-service",
+                meta={
+                    "notification_id": str(notification_id),
+                    "channel": channel,
+                    "attempt": attempt_number,
+                },
+                tenant_id=None,
+            )
     return outcome.notification_status
 
 
@@ -133,7 +157,11 @@ async def send_notification(
     if mapped.recipient_ref is None:
         return None
 
-    idempotency_key = f"{topic}:{mapped.recipient_ref}:{channel}"
+    # Keyed on the EVENT INSTANCE (event_ref), not the topic: two distinct
+    # report.ready events for the same person (two different analysis
+    # sessions) must both be sendable. Only a re-delivery of the SAME
+    # event_ref (e.g. a Kafka redelivery after a consumer crash) collides.
+    idempotency_key = f"{event_ref}:{mapped.recipient_ref}:{channel}"
     async with admin_session(session_factory) as session:
         existing = await notifications_repo.get_by_idempotency_key(
             session, idempotency_key=idempotency_key
@@ -195,6 +223,7 @@ async def send_notification(
         email_channel=email_channel,
         push_channel=push_channel,
         in_app_channel=in_app_channel,
+        is_sensitive=mapped.notification_type.category == TRANSACTIONAL,
     )
     return {**row, "status": status}
 
@@ -230,6 +259,7 @@ async def retry_notification(
         email_channel=email_channel,
         push_channel=push_channel,
         in_app_channel=in_app_channel,
+        is_sensitive=notification_type.category == TRANSACTIONAL,
     )
 
 
@@ -316,4 +346,13 @@ async def handle_provider_status(
             status="success" if delivered else "failure",
             provider_ref=provider_ref,
         )
+        if notification_type_by_key(notification["type"]).category == TRANSACTIONAL:
+            await audit_record(
+                session,
+                action=f"notification.{status}",
+                entity=f"person:{notification['recipient_ref']}",
+                actor="notification-service",
+                meta={"notification_id": str(notification["id"]), "provider_ref": provider_ref},
+                tenant_id=None,
+            )
     return {**notification, "status": status}
