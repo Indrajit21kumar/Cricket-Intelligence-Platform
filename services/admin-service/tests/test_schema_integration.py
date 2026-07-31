@@ -172,7 +172,25 @@ class TestWarehouseSchema:
                 text("SELECT tablename FROM pg_tables WHERE schemaname = 'warehouse'")
             )
             names = {r[0] for r in rows}
-        assert {"fact_usage_event", "fact_revenue_event", "dim_date"} <= names
+        assert {
+            "fact_usage_event",
+            "fact_revenue_event",
+            "dim_date",
+            "fact_model_metric",
+        } <= names
+
+    async def test_fact_model_metric_lookup_index_exists(self, engine: AsyncEngine) -> None:
+        async with engine.begin() as conn:
+            row = await conn.execute(
+                text(
+                    "SELECT indexdef FROM pg_indexes "
+                    "WHERE indexname = 'ix_fact_model_metric_lookup'"
+                )
+            )
+            indexdef = row.scalar_one()
+        assert "model_name" in indexdef
+        assert "metric_name" in indexdef
+        assert "computed_at" in indexdef
 
     async def test_warehouse_tables_are_separate_from_public_schema(
         self, engine: AsyncEngine

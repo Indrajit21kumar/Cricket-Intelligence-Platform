@@ -13,14 +13,20 @@ action is inherently cross-tenant/privileged (NFR-M20-02, FR-M20-09).
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from admin_service.deps import Deps, get_deps
-from admin_service.domain import analytics, moderation_repo, tenant_admin, user_admin
+from admin_service.domain import (
+    analytics,
+    model_metrics_repo,
+    moderation_repo,
+    tenant_admin,
+    user_admin,
+)
 from admin_service.domain.audit import record_admin_action
 from cip_core import AuthenticatedPrincipal, NotFound, require_role, roles
 from cip_data import admin_session
@@ -330,3 +336,50 @@ async def get_analytics(
             events_by_topic=usage.events_by_topic,
         ),
     )
+
+
+# --- Model oversight (FR-M20-05) ----------------------------------------------
+
+
+class ModelHealthResponse(BaseModel):
+    model_name: str
+    sample_count: int
+    latest_accuracy: float | None
+    latest_accuracy_at: datetime | None
+    accuracy_trend: list[tuple[datetime, float]]
+    drift: float | None
+    confidence_mean: float | None
+    confidence_mean_at: datetime | None
+
+
+@admin_router.get("/models", response_model=list[ModelHealthResponse])
+async def get_model_health(
+    _principal: Annotated[AuthenticatedPrincipal, Depends(require_admin)],
+    deps: Annotated[Deps, Depends(get_deps)],
+    since: datetime | None = None,
+) -> list[ModelHealthResponse]:
+    """Per-model accuracy-vs-golden trend, drift, and confidence calibration.
+
+    Defaults to the trailing 30 days. A model with no telemetry yet reports
+    honestly empty fields (None/[]) rather than a fabricated number — see
+    :mod:`admin_service.domain.model_metrics_repo`.
+    """
+    window_start = since or (datetime.now(UTC) - timedelta(days=30))
+    async with admin_session(deps.session_factory) as session:
+        results = [
+            await model_metrics_repo.model_health(session, model_name=name, since=window_start)
+            for name in model_metrics_repo.KNOWN_MODELS
+        ]
+    return [
+        ModelHealthResponse(
+            model_name=r.model_name,
+            sample_count=r.sample_count,
+            latest_accuracy=r.latest_accuracy,
+            latest_accuracy_at=r.latest_accuracy_at,
+            accuracy_trend=r.accuracy_trend,
+            drift=r.drift,
+            confidence_mean=r.confidence_mean,
+            confidence_mean_at=r.confidence_mean_at,
+        )
+        for r in results
+    ]
