@@ -13,6 +13,10 @@ from dataclasses import dataclass
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from admin_service.domain.biomechanics_review_source import (
+    BiomechanicsReviewSource,
+    FakeBiomechanicsReviewSource,
+)
 from admin_service.settings import ServiceSettings
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
@@ -27,6 +31,10 @@ class Deps:
     session_factory: async_sessionmaker[AsyncSession]
     event_bus: KafkaEventBus
     idempotency_store: RedisIdempotencyStore
+    #: A Fake in production too — no service in this build has a real
+    #: cross-service implementation of any Source protocol (see the module
+    #: docstring on biomechanics_review_source).
+    biomechanics_review_source: BiomechanicsReviewSource
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -42,6 +50,7 @@ async def build_deps(settings: ServiceSettings) -> Deps:
         session_factory=session_factory,
         event_bus=event_bus,
         idempotency_store=idempotency_store,
+        biomechanics_review_source=FakeBiomechanicsReviewSource(),
     )
 
 

@@ -24,6 +24,7 @@ from admin_service.domain import (
     analytics,
     model_metrics_repo,
     moderation_repo,
+    review_queue_repo,
     tenant_admin,
     user_admin,
 )
@@ -383,3 +384,93 @@ async def get_model_health(
         )
         for r in results
     ]
+
+
+# --- Biomechanics review queue (FR-M20-06) ------------------------------------
+
+
+class ReviewQueueItemResponse(BaseModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID
+    stroke_ref: str
+    reason: str
+    status: str
+    reviewer: str | None
+    resolution_note: str | None
+    resolved_at: datetime | None
+    created_at: datetime
+
+
+class ReviewQueueResolveRequest(BaseModel):
+    resolution_note: str | None = None
+
+
+@admin_router.get("/review-queue", response_model=list[ReviewQueueItemResponse])
+async def list_review_queue(
+    _principal: Annotated[AuthenticatedPrincipal, Depends(require_admin)],
+    deps: Annotated[Deps, Depends(get_deps)],
+    status: Literal["pending", "resolved"] = "pending",
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[ReviewQueueItemResponse]:
+    async with admin_session(deps.session_factory) as session:
+        rows = await review_queue_repo.list_items(
+            session, status=status, limit=limit, offset=offset
+        )
+    return [ReviewQueueItemResponse(**r) for r in rows]
+
+
+@admin_router.post("/review-queue/sync", response_model=dict[str, int])
+async def sync_review_queue(
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_admin)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> dict[str, int]:
+    """Pull every out-of-range, not-yet-reviewed stroke into M20's own queue."""
+    pending = await deps.biomechanics_review_source.list_pending()
+    async with admin_session(deps.session_factory) as session:
+        for item in pending:
+            await review_queue_repo.upsert_pending(
+                session, tenant_id=item.tenant_id, stroke_ref=item.stroke_ref, reason=item.reason
+            )
+        await record_admin_action(
+            session,
+            admin_ref=str(principal.person_id),
+            action="review_queue.synced",
+            target="review_queue",
+            cross_tenant=True,
+            meta={"synced_count": len(pending)},
+        )
+    return {"synced": len(pending)}
+
+
+@admin_router.post("/review-queue/{item_id}/resolve", response_model=ReviewQueueItemResponse)
+async def resolve_review_item(
+    item_id: uuid.UUID,
+    body: ReviewQueueResolveRequest,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_admin)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> ReviewQueueItemResponse:
+    async with admin_session(deps.session_factory) as session:
+        row = await review_queue_repo.resolve_item(
+            session,
+            item_id=item_id,
+            reviewer=str(principal.person_id),
+            resolution_note=body.resolution_note,
+        )
+        if row is None:
+            raise NotFound("review-queue item not found, or already resolved")
+        await record_admin_action(
+            session,
+            admin_ref=str(principal.person_id),
+            action="review_queue.resolved",
+            target=f"review_queue_item:{item_id}",
+            tenant_ref=row["tenant_id"],
+            cross_tenant=True,
+            meta={"resolution_note": body.resolution_note} if body.resolution_note else None,
+        )
+    # Close the loop with biomechanics-service (the same Fake seam Step 6's
+    # domain module documents -- no real cross-service call exists yet).
+    await deps.biomechanics_review_source.mark_reviewed(
+        tenant_id=row["tenant_id"], stroke_ref=row["stroke_ref"]
+    )
+    return ReviewQueueItemResponse(**row)
