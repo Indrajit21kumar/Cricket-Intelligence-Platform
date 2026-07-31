@@ -160,12 +160,25 @@ class TestTenantIsolation:
     async def test_session_ref_unique_per_tenant_and_player(
         self, session_factory: async_sessionmaker
     ) -> None:
+        # A real (non-NULL) person_id, deliberately -- Postgres treats NULL
+        # as distinct from NULL under a plain multi-column UNIQUE
+        # constraint, so a NULL person_id (as `_INSERT_PLAN` uses elsewhere)
+        # would never collide and wouldn't actually exercise this constraint.
         tid = await _make_tenant(session_factory, "lrn-c")
         ref = f"s-{uuid.uuid4().hex}"
+        person_id = uuid.uuid4()
+        insert_with_person = (
+            "INSERT INTO training_plans "
+            "  (id, tenant_id, person_id, session_ref, stage, schema_version) "
+            "VALUES (:id, :tid, :pid, :ref, 'cognitive', 'plan/1.0')"
+        )
 
         async def _add() -> None:
             async with tenant_session(session_factory, tenant_id=tid) as s:
-                await s.execute(text(_INSERT_PLAN), {"id": uuid.uuid4(), "tid": tid, "ref": ref})
+                await s.execute(
+                    text(insert_with_person),
+                    {"id": uuid.uuid4(), "tid": tid, "pid": person_id, "ref": ref},
+                )
 
         await _add()
         with pytest.raises(IntegrityError):

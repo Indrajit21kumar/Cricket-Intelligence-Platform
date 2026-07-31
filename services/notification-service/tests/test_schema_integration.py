@@ -77,7 +77,7 @@ class TestTables:
                     "WHERE relname IN ('notifications', 'preferences', 'delivery_attempts')"
                 )
             )
-            flags = dict(rows)
+            flags = dict(rows.all())
         assert flags["notifications"] is False
         assert flags["preferences"] is False
         assert flags["delivery_attempts"] is False

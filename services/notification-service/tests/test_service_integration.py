@@ -169,7 +169,12 @@ class TestSendNotification:
     async def test_a_minor_is_redirected_to_their_verified_guardian(
         self, session_factory: async_sessionmaker
     ) -> None:
-        minor_id = await _make_person(session_factory, status="pending_consent", dob_band="minor")
+        # A verified guardianship + active consent is exactly what flips a
+        # real M02 minor to 'active' (identity_service.domain.consent.
+        # activate_minor_if_eligible) -- 'pending_consent' would mean no
+        # guardian has consented yet, which isn't the scenario this test
+        # means to exercise (guardian-mediation of an ALREADY-consented minor).
+        minor_id = await _make_person(session_factory, status="active", dob_band="minor")
         guardian_id = await _make_person(session_factory)
         await _link_guardian(session_factory, minor_id=minor_id, guardian_id=guardian_id)
         await _opt_in(session_factory, person_ref=minor_id, channel="in_app", topic="report_ready")

@@ -178,7 +178,7 @@ class TestCoachTables:
                 ),
                 {"id": uuid.uuid4(), "tid": tid, "sid": session_id},
             )
-        async with admin_session(session_factory) as s:
+        async with tenant_session(session_factory, tenant_id=tid) as s:
             await s.execute(text("DELETE FROM coach_sessions WHERE id = :id"), {"id": session_id})
         async with tenant_session(session_factory, tenant_id=tid) as s:
             remaining = (

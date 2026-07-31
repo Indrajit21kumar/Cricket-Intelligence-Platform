@@ -78,7 +78,7 @@ class TestTables:
                     "'rule_versions','rule_conflicts')"
                 )
             )
-            rls = dict(rows)
+            rls = dict(rows.all())
         assert all(enabled is False for enabled in rls.values()), rls
 
     async def test_conditions_gin_index_exists(self, engine: AsyncEngine) -> None:

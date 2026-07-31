@@ -77,7 +77,8 @@ async def update_confidence(
     await session.execute(
         text(
             "UPDATE rule_versions "
-            "SET snapshot = jsonb_set(snapshot, '{confidence}', to_jsonb(:conf::double precision)) "
+            "SET snapshot = jsonb_set(snapshot, '{confidence}', "
+            "                         to_jsonb(cast(:conf as double precision))) "
             "WHERE rule_id = :rid AND version = :ver"
         ),
         {"rid": rule_id, "ver": version, "conf": confidence},
