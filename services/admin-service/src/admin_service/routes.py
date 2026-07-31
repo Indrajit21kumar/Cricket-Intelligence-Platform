@@ -8,6 +8,12 @@ actions (user/tenant administration, content moderation), each recorded via
 
 Reads are never audited (harmless); every write is, since an admin's every
 action is inherently cross-tenant/privileged (NFR-M20-02, FR-M20-09).
+
+Safety (AC-M20-07): every write in this module is REVERSIBLE (suspend has a
+restore; a moderation/review-queue item is resolved, not erased) and every
+one is audited. No route in this service hard-deletes anything — that stays
+a human operator action outside this API, per the platform's own safety
+rules for irreversible actions, never something an endpoint automates.
 """
 
 from __future__ import annotations
@@ -22,9 +28,11 @@ from pydantic import BaseModel
 from admin_service.deps import Deps, get_deps
 from admin_service.domain import (
     analytics,
+    audit_search_repo,
     model_metrics_repo,
     moderation_repo,
     review_queue_repo,
+    success_metrics_repo,
     tenant_admin,
     user_admin,
 )
@@ -474,3 +482,91 @@ async def resolve_review_item(
         tenant_id=row["tenant_id"], stroke_ref=row["stroke_ref"]
     )
     return ReviewQueueItemResponse(**row)
+
+
+# --- Audit search (FR-M20-07) --------------------------------------------------
+
+
+class AuditLogEntryResponse(BaseModel):
+    id: uuid.UUID
+    tenant_id: uuid.UUID | None
+    actor: str
+    action: str
+    entity: str
+    correlation_id: str | None
+    meta: dict[str, Any]
+    at: datetime
+
+
+@admin_router.get("/audit", response_model=list[AuditLogEntryResponse])
+async def search_audit(
+    _principal: Annotated[AuthenticatedPrincipal, Depends(require_admin)],
+    deps: Annotated[Deps, Depends(get_deps)],
+    tenant_id: uuid.UUID | None = None,
+    actor: str | None = None,
+    action: str | None = None,
+    entity: str | None = None,
+    since: datetime | None = None,
+    until: datetime | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> list[AuditLogEntryResponse]:
+    """Search the platform-wide audit trail, across every tenant."""
+    async with admin_session(deps.session_factory) as session:
+        rows = await audit_search_repo.search_audit_log(
+            session,
+            tenant_id=tenant_id,
+            actor=actor,
+            action=action,
+            entity=entity,
+            since=since,
+            until=until,
+            limit=limit,
+            offset=offset,
+        )
+    return [AuditLogEntryResponse(**r) for r in rows]
+
+
+# --- Success-metric board (Book 1 KPIs; §13) ----------------------------------
+
+
+class SuccessMetricsResponse(BaseModel):
+    total_academies: int
+    countries: int
+    average_model_accuracy: float | None
+    models_with_accuracy_data: int
+    active_tenants_previous_period: int
+    retained_tenants: int
+    retention_rate: float | None
+
+
+@admin_router.get("/success-metrics", response_model=SuccessMetricsResponse)
+async def get_success_metrics(
+    _principal: Annotated[AuthenticatedPrincipal, Depends(require_admin)],
+    deps: Annotated[Deps, Depends(get_deps)],
+    period_start: datetime | None = None,
+    period_end: datetime | None = None,
+) -> SuccessMetricsResponse:
+    """Book-1 KPIs: accuracy, retention, academies, countries.
+
+    Defaults to the trailing 30 days vs. the 30 days before that. No
+    inference-time figure — no service in this build publishes it, so this
+    board doesn't get to invent one (see the module docstring).
+    """
+    now = datetime.now(UTC)
+    end = period_end or now
+    start = period_start or (end - timedelta(days=30))
+    previous_start = start - (end - start)
+    async with admin_session(deps.session_factory) as session:
+        metrics = await success_metrics_repo.compute_success_metrics(
+            session, previous_period_start=previous_start, period_start=start, period_end=end
+        )
+    return SuccessMetricsResponse(
+        total_academies=metrics.total_academies,
+        countries=metrics.countries,
+        average_model_accuracy=metrics.average_model_accuracy,
+        models_with_accuracy_data=metrics.models_with_accuracy_data,
+        active_tenants_previous_period=metrics.active_tenants_previous_period,
+        retained_tenants=metrics.retained_tenants,
+        retention_rate=metrics.retention_rate,
+    )
