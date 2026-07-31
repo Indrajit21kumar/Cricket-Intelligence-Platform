@@ -101,6 +101,36 @@ _BILLING_TEMPLATES: dict[str, NotificationType] = {
     BILLING_PAYMENT_RECOVERED.key: BILLING_PAYMENT_RECOVERED,
 }
 
+#: Every known notification type, keyed by its own key — the reverse of
+#: mapping a topic to a type, used to look a type back up from a
+#: persisted ``notifications.type`` value (e.g. when retrying a row that
+#: already exists, rather than re-deriving it from a fresh event).
+ALL_NOTIFICATION_TYPES: dict[str, NotificationType] = {
+    t.key: t
+    for t in (
+        REPORT_READY,
+        DNA_UPDATED,
+        PLAN_UPDATED,
+        SESSION_SCHEDULED,
+        BILLING_PAYMENT_FAILED,
+        BILLING_PAYMENT_SUSPENDED,
+        BILLING_PAYMENT_RECOVERED,
+    )
+}
+
+
+def notification_type_by_key(key: str) -> NotificationType:
+    """The :class:`NotificationType` for an already-known key.
+
+    Raises :class:`UnmappedEventError` for a key nothing produces — the
+    same refuse-don't-guess posture as :func:`map_event`.
+    """
+    notification_type = ALL_NOTIFICATION_TYPES.get(key)
+    if notification_type is None:
+        raise UnmappedEventError(f"no notification type registered for key: {key!r}")
+    return notification_type
+
+
 _RecipientExtractor = Callable[[Mapping[str, Any]], "uuid.UUID | None"]
 _FIXED_TOPICS: dict[str, tuple[NotificationType, _RecipientExtractor]] = {
     "report.ready": (REPORT_READY, _person_id),
