@@ -11,8 +11,7 @@ Every CIP service follows this shape:
    exit.
 5. Mount routers.
 
-In Step 1 the service exposes only the health + version surface; the
-roster/session/dashboard/analytics/sharing routes mount from later steps.
+Step 7 mounts the roster/session/dashboard/analytics/sharing routes.
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ from academy_service import __version__
 from academy_service.deps import build_deps, shutdown_deps
 from academy_service.health import router as health_router
 from academy_service.health import version_router
+from academy_service.routes import academy_router, reports_router, sessions_router
 from academy_service.settings import get_service_settings
 
 
@@ -65,6 +65,9 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(version_router)
+    app.include_router(academy_router)
+    app.include_router(sessions_router)
+    app.include_router(reports_router)
 
     return app
 

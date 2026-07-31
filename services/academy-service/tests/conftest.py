@@ -11,6 +11,7 @@ import httpx
 import pytest
 import pytest_asyncio
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncEngine, async_sessionmaker
 
 from academy_service.main import create_app
 from cip_core.settings import get_settings
@@ -59,6 +60,18 @@ async def integration_app(
         httpx.AsyncClient(transport=transport, base_url="http://test") as client,
     ):
         yield client
+
+
+@pytest_asyncio.fixture
+async def _engine(_migrated_database: str) -> AsyncIterator[AsyncEngine]:
+    engine = build_engine(_migrated_database)
+    yield engine
+    await engine.dispose()
+
+
+@pytest.fixture
+def session_factory(_engine: AsyncEngine) -> async_sessionmaker:
+    return build_session_factory(_engine)
 
 
 @pytest_asyncio.fixture
