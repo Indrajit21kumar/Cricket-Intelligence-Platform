@@ -80,3 +80,46 @@ class TestAssemblePlan:
         very_slow = assemble_plan([_drill()], stage="cognitive", learning_speed=0.0001)
         assert very_fast.items[0].dose.reps >= 1
         assert very_slow.items[0].dose.reps <= BASE_REPS * 2 + 1
+
+
+class TestAdaptation:
+    def test_an_unmet_target_ref_boosts_the_dose_above_baseline(self) -> None:
+        plain = assemble_plan([_drill()], stage="cognitive", learning_speed=None)
+        adapted = assemble_plan(
+            [_drill()],
+            stage="cognitive",
+            learning_speed=None,
+            adaptation_by_target_ref={"F::A:BM-01": 1.5},
+        )
+        assert adapted.items[0].dose.reps > plain.items[0].dose.reps
+
+    def test_a_target_ref_absent_from_the_adaptation_map_is_unaffected(self) -> None:
+        plain = assemble_plan([_drill()], stage="cognitive", learning_speed=None)
+        adapted = assemble_plan(
+            [_drill()],
+            stage="cognitive",
+            learning_speed=None,
+            adaptation_by_target_ref={"some-other-target": 1.5},
+        )
+        assert adapted.items[0].dose.reps == plain.items[0].dose.reps
+
+    def test_adaptation_composes_with_learning_speed(self) -> None:
+        fast_only = assemble_plan(
+            [_drill()], stage="associative", learning_speed=REFERENCE_IMPROVEMENT_RATE * 2
+        )
+        fast_and_adapted = assemble_plan(
+            [_drill()],
+            stage="associative",
+            learning_speed=REFERENCE_IMPROVEMENT_RATE * 2,
+            adaptation_by_target_ref={"F::A:BM-01": 1.5},
+        )
+        assert fast_and_adapted.items[0].dose.reps > fast_only.items[0].dose.reps
+
+    def test_adaptation_is_bounded_even_for_a_very_large_boost(self) -> None:
+        adapted = assemble_plan(
+            [_drill()],
+            stage="cognitive",
+            learning_speed=None,
+            adaptation_by_target_ref={"F::A:BM-01": 100.0},
+        )
+        assert adapted.items[0].dose.reps <= BASE_REPS * 3 + 1

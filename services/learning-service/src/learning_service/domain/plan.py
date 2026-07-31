@@ -14,13 +14,16 @@ cover drives"), not a general formula.
 
 Longitudinal planning (SR-001) is a property of the SYSTEM, not this one
 pure function: plans persist as append-only history (migration 0001) and
-Step 6's evaluation loop builds each new plan on the prior one's outcome,
-rather than this module reasoning about history itself.
+Step 6's evaluation loop builds each new plan on the prior one's outcome —
+``assemble_plan``'s optional ``adaptation_by_target_ref`` is how that prior
+outcome feeds back in: an item whose target_ref was unmet last cycle gets
+its learning-speed dose boosted (Step 6's ``adaptation_multiplier``), rather
+than repeating an insufficient dose unchanged.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,6 +37,9 @@ BASE_TIMELINE_DAYS = 14
 
 MIN_DOSE_MULTIPLIER = 0.5
 MAX_DOSE_MULTIPLIER = 2.0
+#: A boosted (Step 6 adaptation) dose may exceed MAX_DOSE_MULTIPLIER, but
+#: never without bound.
+ADAPTED_MAX_DOSE_MULTIPLIER = 3.0
 
 #: The improvement_rate a dose multiplier of 1.0 (baseline dose) corresponds
 #: to — an explicit reference point since Book 1 gives no numeric baseline.
@@ -109,19 +115,35 @@ def _tune_dose(multiplier: float) -> Dose:
 
 
 def assemble_plan(
-    selected_drills: Sequence[SelectedDrill], *, stage: str, learning_speed: float | None
+    selected_drills: Sequence[SelectedDrill],
+    *,
+    stage: str,
+    learning_speed: float | None,
+    adaptation_by_target_ref: Mapping[str, float] | None = None,
 ) -> TrainingPlan:
-    """Build the training plan: every selected drill, dosed to learning speed."""
-    multiplier = _dose_multiplier(learning_speed)
-    dose = _tune_dose(multiplier)
-    items = tuple(
-        PlanItem(
-            finding_ref=drill.finding_id,
-            drill_name=drill.drill_name,
-            objective=drill.objective.to_dict(),
-            dose=dose,
-            target_ref=f"{drill.finding_id}:{drill.objective.metric_id}",
+    """Build the training plan: every selected drill, dosed to learning speed.
+
+    ``adaptation_by_target_ref`` (Step 6) boosts an item's dose above the
+    plain learning-speed multiplier when that item's target_ref was unmet
+    in the prior plan cycle; absent for a target_ref, the multiplier is 1.0
+    (no adaptation).
+    """
+    base_multiplier = _dose_multiplier(learning_speed)
+    adaptation_by_target_ref = adaptation_by_target_ref or {}
+    items = []
+    for drill in selected_drills:
+        target_ref = f"{drill.finding_id}:{drill.objective.metric_id}"
+        adaptation = adaptation_by_target_ref.get(target_ref, 1.0)
+        multiplier = max(
+            MIN_DOSE_MULTIPLIER, min(ADAPTED_MAX_DOSE_MULTIPLIER, base_multiplier * adaptation)
         )
-        for drill in selected_drills
-    )
-    return TrainingPlan(stage=stage, items=items, learning_speed=learning_speed)
+        items.append(
+            PlanItem(
+                finding_ref=drill.finding_id,
+                drill_name=drill.drill_name,
+                objective=drill.objective.to_dict(),
+                dose=_tune_dose(multiplier),
+                target_ref=target_ref,
+            )
+        )
+    return TrainingPlan(stage=stage, items=tuple(items), learning_speed=learning_speed)
