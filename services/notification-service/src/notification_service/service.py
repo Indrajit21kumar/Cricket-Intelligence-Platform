@@ -1,10 +1,11 @@
-"""Notification application service (M19 Step 5).
+"""Notification application service (M19 Steps 5 + 6).
 
 Where every prior step's pure domain logic meets I/O: map the event
 (Step 2), check contactability/consent + gate on preferences/quiet hours
 (Step 4), idempotently create the notification row (Step 5), render +
 dispatch the message (Step 3), and record the delivery attempt's outcome
-under the retry/dead-letter policy (Step 5).
+under the retry/dead-letter policy (Step 5). Step 6 adds the inbox,
+preference updates, and provider delivery-status handling on top.
 
 A gated-out or unresolvable send is never persisted at all — the
 ``notifications`` table is "one row per send intent" (§9), and a send
@@ -32,7 +33,7 @@ from notification_service.domain.event_mapping import (
     notification_type_by_key,
 )
 from notification_service.domain.gating import PreferenceRecord, QuietHours, gate_send
-from notification_service.domain.preferences_repo import get_preference
+from notification_service.domain.preferences_repo import get_preference, upsert_preference
 from notification_service.domain.retry import evaluate_attempt
 from notification_service.domain.templates import render_message
 
@@ -230,3 +231,89 @@ async def retry_notification(
         push_channel=push_channel,
         in_app_channel=in_app_channel,
     )
+
+
+async def get_inbox(
+    *,
+    session_factory: async_sessionmaker[Any],
+    recipient_ref: uuid.UUID,
+    limit: int = 50,
+    offset: int = 0,
+) -> list[dict[str, Any]]:
+    """A recipient's own in-app inbox (§10, AC-M19-01's rendering half)."""
+    async with admin_session(session_factory) as session:
+        return await notifications_repo.list_for_recipient(
+            session, recipient_ref=recipient_ref, channel="in_app", limit=limit, offset=offset
+        )
+
+
+async def mark_notification_read(
+    *,
+    session_factory: async_sessionmaker[Any],
+    notification_id: uuid.UUID,
+    recipient_ref: uuid.UUID,
+) -> bool:
+    """Mark one in-app notification read, scoped to its own recipient."""
+    async with admin_session(session_factory) as session:
+        return await notifications_repo.mark_read(
+            session, notification_id=notification_id, recipient_ref=recipient_ref
+        )
+
+
+async def update_preference(
+    *,
+    session_factory: async_sessionmaker[Any],
+    person_ref: uuid.UUID,
+    channel: str,
+    topic: str,
+    enabled: bool,
+    quiet_hours: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Update one (channel, topic) preference (§10's ``PATCH /v1/preferences``)."""
+    async with admin_session(session_factory) as session:
+        return await upsert_preference(
+            session,
+            person_ref=person_ref,
+            channel=channel,
+            topic=topic,
+            enabled=enabled,
+            quiet_hours=quiet_hours,
+        )
+
+
+async def handle_provider_status(
+    *,
+    session_factory: async_sessionmaker[Any],
+    provider_ref: str,
+    delivered: bool,
+) -> dict[str, Any] | None:
+    """Apply a channel provider's async delivery confirmation (§10's status webhook).
+
+    Distinct from :func:`_attempt_delivery`'s own retry/dead-letter policy:
+    this reflects what the PROVIDER reports about a send we already made,
+    not another attempt of our own — a bounce here doesn't consume one of
+    :data:`~notification_service.domain.retry.MAX_DELIVERY_ATTEMPTS`, it's
+    just recorded and the notification marked failed. Returns None for an
+    unrecognised provider_ref (a webhook for a send this service never made).
+    """
+    async with admin_session(session_factory) as session:
+        notification = await notifications_repo.find_by_provider_ref(
+            session, provider_ref=provider_ref
+        )
+        if notification is None:
+            return None
+        status = "delivered" if delivered else "failed"
+        await notifications_repo.update_status(
+            session, notification_id=notification["id"], status=status
+        )
+        await delivery_attempts_repo.record_attempt(
+            session,
+            notification_id=notification["id"],
+            attempt=await delivery_attempts_repo.count_attempts(
+                session, notification_id=notification["id"]
+            )
+            + 1,
+            status="success" if delivered else "failure",
+            provider_ref=provider_ref,
+        )
+    return {**notification, "status": status}

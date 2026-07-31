@@ -36,6 +36,14 @@ class ServiceSettings(CoreSettings):
         description="Redis URL for the idempotency store",
     )
 
+    # Channel-provider webhook signing secret (Step 6), same convention as
+    # billing-service's payment_webhook_secret. A real provider supplies its
+    # own signing secret via the managed secret store.
+    provider_webhook_secret: str = Field(
+        "dev-webhook-secret-not-for-production",
+        description="HMAC secret used to verify channel-provider status webhooks",
+    )
+
 
 @lru_cache(maxsize=1)
 def get_service_settings() -> ServiceSettings:

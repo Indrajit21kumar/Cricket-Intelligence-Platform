@@ -11,8 +11,7 @@ Every CIP service follows this shape:
    exit.
 5. Mount routers.
 
-In Step 1 the service exposes only the health + version surface; the
-inbox/preferences/webhook routes mount from later steps.
+Step 6 mounts the inbox/preferences/webhook routes.
 """
 
 from __future__ import annotations
@@ -28,6 +27,7 @@ from notification_service import __version__
 from notification_service.deps import build_deps, shutdown_deps
 from notification_service.health import router as health_router
 from notification_service.health import version_router
+from notification_service.routes import notifications_router, preferences_router, webhooks_router
 from notification_service.settings import get_service_settings
 
 
@@ -68,6 +68,9 @@ def create_app() -> FastAPI:
 
     app.include_router(health_router)
     app.include_router(version_router)
+    app.include_router(notifications_router)
+    app.include_router(preferences_router)
+    app.include_router(webhooks_router)
 
     return app
 
