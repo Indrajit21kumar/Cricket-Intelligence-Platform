@@ -20,6 +20,9 @@ TEST_JWT_SECRET = "test-jwt-signing-key-do-not-use-in-any-real-environment-42"
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 BASE_MIGRATIONS = REPO_ROOT / "migrations" / "base"
+# M20 Step 3 user administration reads/writes M02's persons table directly
+# (the same precedent cip_core.consent already set).
+IDENTITY_MIGRATIONS = REPO_ROOT / "services" / "identity-service" / "migrations"
 ADMIN_MIGRATIONS = REPO_ROOT / "services" / "admin-service" / "migrations"
 
 
@@ -36,9 +39,10 @@ def _database_url() -> str:
 
 @pytest.fixture(scope="session")
 def _migrated_database() -> str:
-    """Apply base + admin migrations once (idempotent)."""
+    """Apply base + identity + admin migrations once (idempotent)."""
     url = _database_url()
     upgrade_head(url, migrations_dir=BASE_MIGRATIONS)
+    upgrade_head(url, migrations_dir=IDENTITY_MIGRATIONS)
     upgrade_head(url, migrations_dir=ADMIN_MIGRATIONS)
     return url
 
