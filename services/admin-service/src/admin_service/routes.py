@@ -13,14 +13,14 @@ action is inherently cross-tenant/privileged (NFR-M20-02, FR-M20-09).
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
 
 from admin_service.deps import Deps, get_deps
-from admin_service.domain import moderation_repo, tenant_admin, user_admin
+from admin_service.domain import analytics, moderation_repo, tenant_admin, user_admin
 from admin_service.domain.audit import record_admin_action
 from cip_core import AuthenticatedPrincipal, NotFound, require_role, roles
 from cip_data import admin_session
@@ -260,3 +260,73 @@ async def resolve_moderation_case(
             meta={"action_taken": body.action_taken} if body.action_taken else None,
         )
     return ModerationCaseResponse(**row)
+
+
+# --- Revenue + usage analytics (FR-M20-03/04) ---------------------------------
+
+
+class RevenueAnalyticsResponse(BaseModel):
+    revenue_minor_by_currency: dict[str, int]
+    invoice_count: int
+    new_subscriptions: int
+    cancellations: int
+    upgrades: int
+    downgrades: int
+    churn_rate: float | None
+
+
+class UsageAnalyticsResponse(BaseModel):
+    analyses_started: int
+    analyses_completed: int
+    active_tenants: int
+    active_players: int
+    events_by_topic: dict[str, int]
+
+
+class AnalyticsResponse(BaseModel):
+    period_start: datetime
+    period_end: datetime
+    revenue: RevenueAnalyticsResponse
+    usage: UsageAnalyticsResponse
+
+
+def _start_of_month(now: datetime) -> datetime:
+    return now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+@admin_router.get("/analytics", response_model=AnalyticsResponse)
+async def get_analytics(
+    _principal: Annotated[AuthenticatedPrincipal, Depends(require_admin)],
+    deps: Annotated[Deps, Depends(get_deps)],
+    period_start: datetime | None = None,
+    period_end: datetime | None = None,
+) -> AnalyticsResponse:
+    """Revenue + usage analytics over the warehouse (NFR-M20-03: never the
+    production DB) for one period. Defaults to the current calendar month
+    to date — a live "this month so far" view."""
+    now = datetime.now(UTC)
+    start = period_start or _start_of_month(now)
+    end = period_end or now
+    async with admin_session(deps.session_factory) as session:
+        revenue = await analytics.revenue_analytics(session, period_start=start, period_end=end)
+        usage = await analytics.usage_analytics(session, period_start=start, period_end=end)
+    return AnalyticsResponse(
+        period_start=start,
+        period_end=end,
+        revenue=RevenueAnalyticsResponse(
+            revenue_minor_by_currency=revenue.revenue_minor_by_currency,
+            invoice_count=revenue.invoice_count,
+            new_subscriptions=revenue.new_subscriptions,
+            cancellations=revenue.cancellations,
+            upgrades=revenue.upgrades,
+            downgrades=revenue.downgrades,
+            churn_rate=revenue.churn_rate,
+        ),
+        usage=UsageAnalyticsResponse(
+            analyses_started=usage.analyses_started,
+            analyses_completed=usage.analyses_completed,
+            active_tenants=usage.active_tenants,
+            active_players=usage.active_players,
+            events_by_topic=usage.events_by_topic,
+        ),
+    )
