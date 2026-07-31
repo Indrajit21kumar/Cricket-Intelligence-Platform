@@ -100,6 +100,7 @@ async def post_session(
 ) -> dict[str, Any]:
     return await service.create_session(
         session_factory=deps.session_factory,
+        event_bus=deps.event_bus,
         tenant_id=tenant_id,
         coach_ref=principal.person_id,
         scheduled_at=body.scheduled_at,

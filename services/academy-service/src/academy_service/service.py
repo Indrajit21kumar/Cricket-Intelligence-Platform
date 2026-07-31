@@ -67,6 +67,7 @@ from cip_data import admin_session, tenant_session
 from cip_events import EventBus, EventEnvelope
 
 TOPIC_REPORT_SHARED = "report.shared"
+TOPIC_SESSION_SCHEDULED = "session.scheduled"
 
 
 async def list_roster(
@@ -112,12 +113,18 @@ async def assign_coach(
 async def create_session(
     *,
     session_factory: async_sessionmaker[Any],
+    event_bus: EventBus,
     tenant_id: uuid.UUID,
     coach_ref: uuid.UUID | None,
     scheduled_at: datetime,
     requested_by: uuid.UUID,
 ) -> dict[str, Any]:
-    """Create/schedule a training session (FR-M18-02, AC-M18-03)."""
+    """Create/schedule a training session (FR-M18-02, AC-M18-03).
+
+    Publishes ``session.scheduled`` — M19's own spec (§4) names "session
+    events" from M18 as a notification source ("Session scheduled /
+    reminder"); this is that source.
+    """
     async with tenant_session(session_factory, tenant_id=tenant_id) as session:
         row = await sessions_repo.create_session(
             session, tenant_id=tenant_id, coach_ref=coach_ref, scheduled_at=scheduled_at
@@ -130,6 +137,20 @@ async def create_session(
             meta={"coach_ref": str(coach_ref) if coach_ref else None},
             tenant_id=tenant_id,
         )
+
+    envelope = EventEnvelope(
+        correlation_id=str(row["id"]),
+        tenant_id=tenant_id,
+        schema_version="1.0.0",
+        idempotency_key=f"session.scheduled:{row['id']}",
+        payload={
+            "session_id": str(row["id"]),
+            "tenant_id": str(tenant_id),
+            "coach_ref": str(coach_ref) if coach_ref else None,
+            "scheduled_at": scheduled_at.isoformat(),
+        },
+    )
+    await event_bus.publish(TOPIC_SESSION_SCHEDULED, envelope)
     return row
 
 
