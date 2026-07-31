@@ -3,7 +3,10 @@
 Everything that needs an open connection (DB engine, Kafka bus, Redis client)
 is built in :func:`build_deps` at startup and shut down in :func:`shutdown_deps`.
 FastAPI's lifespan wires those calls; route handlers pull dependencies via
-:func:`get_deps`.
+:func:`get_deps`. Every cross-service source (M13 findings, M15 benchmark
+comparisons, M16 DNA history, M04 personal deviations, tenant resolution) is
+a Fake for now — no service in this build has a real HTTP client wired for
+any of these adapters yet.
 """
 
 from __future__ import annotations
@@ -15,6 +18,18 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
+from learning_service.domain.sources import (
+    BenchmarkComparisonSource,
+    DNAHistorySource,
+    FakeBenchmarkComparisonSource,
+    FakeDNAHistorySource,
+    FakeFindingsSource,
+    FakePersonalDeviationSource,
+    FakeTenantResolver,
+    FindingsSource,
+    PersonalDeviationSource,
+    TenantResolver,
+)
 from learning_service.settings import ServiceSettings
 
 
@@ -27,6 +42,11 @@ class Deps:
     session_factory: async_sessionmaker[AsyncSession]
     event_bus: KafkaEventBus
     idempotency_store: RedisIdempotencyStore
+    findings_source: FindingsSource
+    benchmark_source: BenchmarkComparisonSource
+    dna_history_source: DNAHistorySource
+    deviation_source: PersonalDeviationSource
+    tenant_resolver: TenantResolver
 
 
 async def build_deps(settings: ServiceSettings) -> Deps:
@@ -42,6 +62,11 @@ async def build_deps(settings: ServiceSettings) -> Deps:
         session_factory=session_factory,
         event_bus=event_bus,
         idempotency_store=idempotency_store,
+        findings_source=FakeFindingsSource(),
+        benchmark_source=FakeBenchmarkComparisonSource(),
+        dna_history_source=FakeDNAHistorySource(),
+        deviation_source=FakePersonalDeviationSource(),
+        tenant_resolver=FakeTenantResolver(),
     )
 
 
