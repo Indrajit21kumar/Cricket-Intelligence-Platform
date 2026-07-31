@@ -95,6 +95,7 @@ known-first-party = [
     "dna_service",
     "learning_service",
     "academy_service",
+    "notification_service",
 ]
 
 [tool.ruff.format]
