@@ -113,8 +113,6 @@ async def replace_evidence(
 
 
 async def get_result(session: AsyncSession, correlation_id: str) -> dict[str, Any] | None:
-    query = (  # nosec B608 -- constant columns
-        f"SELECT {_RESULT_COLUMNS} FROM reasoning_results WHERE correlation_id = :corr"
-    )
+    query = f"SELECT {_RESULT_COLUMNS} FROM reasoning_results WHERE correlation_id = :corr"  # nosec B608 -- constant columns
     row = (await session.execute(text(query), {"corr": correlation_id})).mappings().first()
     return dict(row) if row else None
