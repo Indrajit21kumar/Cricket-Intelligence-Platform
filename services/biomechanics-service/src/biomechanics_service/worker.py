@@ -16,9 +16,9 @@ import asyncio
 
 from biomechanics_service.deps import build_deps, shutdown_deps
 from biomechanics_service.service import (
-    CONSUMER_GROUP,
-    TOPIC_SHOT_CLASSIFIED,
     build_biomechanics_consumer,
+    consumer_group_for,
+    source_topic_for,
 )
 from biomechanics_service.settings import get_service_settings
 from cip_observability import get_logger
@@ -26,22 +26,27 @@ from cip_observability import get_logger
 log = get_logger(__name__)
 
 
-async def run_worker(*, group_id: str = CONSUMER_GROUP, stop_after: int | None = None) -> int:
-    """Consume ``video.normalized`` until cancelled. Returns messages processed.
+async def run_worker(*, group_id: str | None = None, stop_after: int | None = None) -> int:
+    """Consume the trigger topic until cancelled. Returns messages processed.
 
-    ``stop_after`` bounds the loop and ``group_id`` isolates the offsets so a
-    test can drive the real consumer against a real broker; production leaves
-    both at their defaults.
+    The topic and group come from :func:`source_topic_for` /
+    :func:`consumer_group_for`, the same functions the consumer is built with.
+    Hardcoding them here would let the subscription drift from the consumer —
+    the worker would listen on one topic while the consumer expected another,
+    and no report would ever be produced.
+
+    ``stop_after`` bounds the loop and ``group_id`` overrides the offsets so a
+    test can drive the real consumer against a real broker.
     """
     settings = get_service_settings()
     deps = await build_deps(settings)
     consumer = build_biomechanics_consumer(deps, idempotency_store=deps.idempotency_store)
+    topic = source_topic_for(deps)
+    group = group_id or consumer_group_for(deps)
     processed = 0
-    log.info(
-        "biomechanics.worker.started", extra={"topic": TOPIC_SHOT_CLASSIFIED, "group": group_id}
-    )
+    log.info("biomechanics.worker.started", extra={"topic": topic, "group": group})
     try:
-        async for envelope in deps.event_bus.consume(TOPIC_SHOT_CLASSIFIED, group_id=group_id):
+        async for envelope in deps.event_bus.consume(topic, group_id=group):
             await consumer.process_one(envelope)
             processed += 1
             if stop_after is not None and processed >= stop_after:

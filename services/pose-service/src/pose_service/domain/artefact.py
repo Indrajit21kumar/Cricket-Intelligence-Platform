@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from pathlib import Path
 from typing import Protocol
 
 from pose_service.domain.keypoints import Keypoint
@@ -67,6 +68,35 @@ class ArtefactStore(Protocol):
         ...
 
     async def load(self, key: str) -> str | None: ...
+
+
+class LocalFilesystemArtefactStore:
+    """Real, local-disk artefact store for the pose-first dev slice.
+
+    The in-process fake cannot be read by any OTHER process, so M10 could
+    never see M06's keypoints — the reason the biomechanics path had nothing
+    real to consume. Writing to a shared local root makes the artefact a
+    genuine cross-service handoff, the same pattern video-service uses for
+    clip bytes. Writes go via a ``.part`` temp file renamed into place so a
+    reader never observes half a JSON document.
+    """
+
+    def __init__(self, *, root: Path) -> None:
+        self._root = root
+
+    async def save(self, key: str, payload: str) -> str:
+        dest = self._root / key
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".part")
+        tmp.write_text(payload, encoding="utf-8")
+        tmp.replace(dest)
+        return key
+
+    async def load(self, key: str) -> str | None:
+        path = self._root / key
+        if not path.is_file():
+            return None
+        return path.read_text(encoding="utf-8")
 
 
 class FakeArtefactStore:

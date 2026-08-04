@@ -8,6 +8,7 @@ import { defineConfig } from "vite";
 //   profile-service  (M04)  ->  :8002    (uvicorn profile_service.main:app  --port 8002)
 //   video-service    (M05)  ->  :8003    (uvicorn video_service.main:app    --port 8003)
 //   pose-service     (M06)  ->  :8004    (uvicorn pose_service.main:app     --port 8004)
+//   biomechanics     (M10)  ->  :8010    (uvicorn biomechanics_service.main:app --port 8010)
 // `scripts/run_console_stack.py` starts exactly this set on these ports.
 const svc = (target: string) => ({
   target,
@@ -24,6 +25,7 @@ export default defineConfig({
       "/api/profile": svc("http://127.0.0.1:8002"),
       "/api/video": svc("http://127.0.0.1:8003"),
       "/api/pose": svc("http://127.0.0.1:8004"),
+      "/api/biomechanics": svc("http://127.0.0.1:8010"),
     },
   },
 });

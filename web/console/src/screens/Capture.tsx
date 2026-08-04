@@ -7,8 +7,10 @@ import { useEffect, useRef, useState } from "react";
 import {
   api,
   CipError,
+  type BiomechanicsReport,
   type CaptureGuidance,
   type CompleteResponse,
+  type MetricEntry,
   type PoseRun,
   type QualityFlag,
 } from "../lib/api";
@@ -51,6 +53,36 @@ async function pollPose(correlationId: string): Promise<PoseRun | null> {
   return null;
 }
 
+// The biomechanics report follows the pose run (its worker consumes
+// pose.keypoints), so it arrives shortly after — a much shorter wait than
+// pose itself, which is the per-frame inference.
+const REPORT_POLL_ATTEMPTS = 30;
+
+async function pollReport(correlationId: string): Promise<BiomechanicsReport | null> {
+  for (let i = 0; i < REPORT_POLL_ATTEMPTS; i++) {
+    try {
+      return await api.getBiomechanics(correlationId);
+    } catch (e) {
+      if (!(e instanceof CipError) || e.status !== 404) throw e;
+      await sleep(POSE_POLL_INTERVAL_MS);
+    }
+  }
+  return null;
+}
+
+// Plain-English reasons a metric is absent, keyed by M10's disabled_reason.
+// Mirrors report-service's WITHHELD_EXPLANATIONS so the console can explain a
+// gap even when it reads M10 directly rather than through a M14 report.
+const WITHHELD_REASONS: Record<string, string> = {
+  depth_unresolved:
+    "Rotation about the body's vertical axis needs two camera angles — a single camera cannot see it.",
+  scale_unresolved:
+    "No real-world scale was established, so distances and speeds can't be given in cm or m/s.",
+  crease_axis_unresolved:
+    "The camera angle couldn't be resolved. Film side-on for across-the-crease measurements.",
+  no_input_data: "This needs bat tracking, which isn't available yet.",
+};
+
 export function Capture() {
   const { me, tenantId } = useSession();
   const [guidance, setGuidance] = useState<CaptureGuidance | null>(null);
@@ -62,6 +94,8 @@ export function Capture() {
   const [result, setResult] = useState<CompleteResponse | null>(null);
   const [pose, setPose] = useState<PoseRun | null>(null);
   const [posePending, setPosePending] = useState(false);
+  const [bio, setBio] = useState<BiomechanicsReport | null>(null);
+  const [bioPending, setBioPending] = useState(false);
   const [rejectFlags, setRejectFlags] = useState<QualityFlag[]>([]);
   const [rejectReasons, setRejectReasons] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +110,8 @@ export function Capture() {
     setFile(null);
     setPose(null);
     setPosePending(false);
+    setBio(null);
+    setBioPending(false);
     setProgress(null);
     if (fileInput.current) fileInput.current.value = "";
   };
@@ -116,6 +152,13 @@ export function Capture() {
       const run = await pollPose(correlationId);
       setPose(run);
       setPosePending(false);
+
+      // Biomechanics only exists if pose found a subject to measure.
+      if (run && run.quality !== "rejected") {
+        setBioPending(true);
+        setBio(await pollReport(correlationId));
+        setBioPending(false);
+      }
     } catch (e) {
       setProgress(null);
       if (e instanceof CipError && e.status === 422) {
@@ -203,7 +246,14 @@ export function Capture() {
       ) : null}
 
       {stage === "admitted" && result ? (
-        <AdmittedResult result={result} pose={pose} posePending={posePending} onAgain={reset} />
+        <AdmittedResult
+          result={result}
+          pose={pose}
+          posePending={posePending}
+          bio={bio}
+          bioPending={bioPending}
+          onAgain={reset}
+        />
       ) : null}
       {stage === "rejected" ? (
         <RejectPrompt flags={rejectFlags} reasons={rejectReasons} onAgain={reset} />
@@ -245,11 +295,15 @@ function AdmittedResult({
   result,
   pose,
   posePending,
+  bio,
+  bioPending,
   onAgain,
 }: {
   result: CompleteResponse;
   pose: PoseRun | null;
   posePending: boolean;
+  bio: BiomechanicsReport | null;
+  bioPending: boolean;
   onAgain: () => void;
 }) {
   const conf = result.spatial_confidence;
@@ -311,8 +365,135 @@ function AdmittedResult({
     </Card>
 
     <PoseResult pose={pose} pending={posePending} />
+    {pose && pose.quality !== "rejected" ? (
+      <BiomechanicsResult report={bio} pending={bioPending} />
+    ) : null}
     </>
   );
+}
+
+// The stroke's measurements (M10). Shows only metrics that carry a real
+// number, and explains every one it cannot give — a coach who can't find
+// X-Factor should learn it needs a second camera, not be left guessing.
+function BiomechanicsResult({
+  report,
+  pending,
+}: {
+  report: BiomechanicsReport | null;
+  pending: boolean;
+}) {
+  if (pending) {
+    return (
+      <Card>
+        <SectionTitle>Stroke measurements</SectionTitle>
+        <Loading label="Measuring the body through the stroke…" />
+      </Card>
+    );
+  }
+  if (!report) {
+    return (
+      <Card>
+        <SectionTitle>Stroke measurements</SectionTitle>
+        <EmptyState
+          title="No measurements yet"
+          body="Pose succeeded but the biomechanics engine hasn't reported back. Check that biomechanics-service and its worker are running."
+        />
+      </Card>
+    );
+  }
+
+  const entries = Object.entries(report.metrics);
+  const delivered = entries.filter(([, m]) => m.value !== null);
+  const withheld = entries.filter(([, m]) => m.value === null);
+
+  // Group the withheld metrics by reason so the reader gets four
+  // explanations, not twelve repetitions of the same sentence.
+  const grouped = new Map<string, string[]>();
+  for (const [id, m] of withheld) {
+    const reason = m.disabled_reason || "no_input_data";
+    grouped.set(reason, [...(grouped.get(reason) ?? []), id]);
+  }
+
+  const t = report.phase_boundaries;
+  const fps = report.quality?.fps || 30;
+  const phaseOrder = ["stance", "backlift", "downswing", "impact", "follow_through"];
+
+  return (
+    <Card>
+      <div className="mb-3 flex items-center justify-between">
+        <SectionTitle>Stroke measurements</SectionTitle>
+        <Pill tone={report.provisional ? "attention" : "success"}>
+          {report.provisional ? "provisional" : `${delivered.length} measured`}
+        </Pill>
+      </div>
+
+      {Object.keys(t).length > 0 ? (
+        <>
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Stroke timing
+          </div>
+          <div className="mb-4 grid grid-cols-2 gap-x-4 sm:grid-cols-5">
+            {phaseOrder
+              .filter((p) => p in t)
+              .map((p) => (
+                <div key={p} className="border-b border-slate-100 py-2">
+                  <div className="text-xs capitalize text-slate-500">{p.replace(/_/g, " ")}</div>
+                  <div className="text-sm font-semibold text-slate-800">
+                    {(t[p] / fps).toFixed(2)}s
+                  </div>
+                </div>
+              ))}
+          </div>
+          <p className="mb-4 text-xs text-slate-400">
+            Timing derived from hand motion ({report.phase_method.replace(/_/g, " ")}) — no ball
+            tracking was involved.
+          </p>
+        </>
+      ) : null}
+
+      {delivered.length > 0 ? (
+        <>
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Measurements
+          </div>
+          <div className="space-y-1">
+            {delivered.map(([id, m]) => (
+              <MetricRow
+                key={id}
+                label={(m.name || id).replace(/_/g, " ")}
+                value={formatMetric(m)}
+                unit={m.unit === "ratio" ? undefined : m.unit || undefined}
+                provenance={m.provenance === "estimated" ? "estimated" : "measured"}
+              />
+            ))}
+          </div>
+        </>
+      ) : null}
+
+      {grouped.size > 0 ? (
+        <div className="mt-5">
+          <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
+            Not measured ({withheld.length})
+          </div>
+          <ul className="space-y-2">
+            {[...grouped.entries()].map(([reason, ids]) => (
+              <li key={reason} className="rounded-lg bg-slate-50 px-3 py-2 text-sm">
+                <span className="font-medium text-slate-700">{ids.join(", ")}</span>
+                <span className="block text-slate-500">
+                  {WITHHELD_REASONS[reason] ?? reason.replace(/_/g, " ")}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+    </Card>
+  );
+}
+
+function formatMetric(m: MetricEntry): string {
+  if (m.value === null) return "—";
+  return Math.abs(m.value) >= 100 ? m.value.toFixed(0) : m.value.toFixed(2);
 }
 
 // The pose run (M06) for this clip. Body keypoints are real when the service
@@ -384,8 +565,8 @@ function PoseResult({ pose, pending }: { pose: PoseRun | null; pending: boolean 
       ) : null}
 
       <p className="mt-4 text-xs text-slate-400">
-        Bat, ball and shot detection are not yet trained, so biomechanics and coaching reports are
-        not derived from this clip.
+        These keypoints feed the stroke measurements below. Bat, ball and shot detection are not
+        trained yet, so no shot is named and bat-derived measurements are withheld.
       </p>
     </Card>
   );

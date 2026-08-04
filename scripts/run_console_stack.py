@@ -52,6 +52,8 @@ SERVICES: list[tuple[str, list[str]]] = [
     ("video    :8003", ["uvicorn", "video_service.main:app", "--port", "8003"]),
     ("pose     :8004", ["uvicorn", "pose_service.main:app", "--port", "8004"]),
     ("pose worker   ", [sys.executable, "-m", "pose_service.worker"]),
+    ("biomech  :8010", ["uvicorn", "biomechanics_service.main:app", "--port", "8010"]),
+    ("biomech worker", [sys.executable, "-m", "biomechanics_service.worker"]),
 ]
 
 #: Kept in step with pose_service.service (imported lazily so this script can
@@ -65,6 +67,7 @@ MIGRATIONS = [
     ("profile", REPO_ROOT / "services" / "profile-service" / "migrations"),
     ("video", REPO_ROOT / "services" / "video-service" / "migrations"),
     ("pose", REPO_ROOT / "services" / "pose-service" / "migrations"),
+    ("biomechanics", REPO_ROOT / "services" / "biomechanics-service" / "migrations"),
 ]
 
 
@@ -140,6 +143,10 @@ def build_env(*, real: bool) -> dict[str, str]:
         # needs storage+processor (M05) and loader+model (M06) together.
         env["CIP_USE_REAL_PIPELINE"] = "true"
         env["CIP_USE_REAL_POSE_MODEL"] = "true"
+        # M10 builds strokes from M06's artefact alone. Without this it waits
+        # on shot.classified from the stub classifier and never produces a
+        # report from real footage.
+        env["CIP_USE_POSE_ONLY_SOURCE"] = "true"
         # Must match the port video-service is served on below, since the
         # minted upload_url points back at this service's own API.
         env.setdefault("CIP_PUBLIC_BASE_URL", "http://127.0.0.1:8003")

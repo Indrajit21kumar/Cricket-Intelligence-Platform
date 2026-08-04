@@ -28,6 +28,9 @@ from cip_data import tenant_session
 from cip_events import EventBus, EventEnvelope, IdempotencyStore, IdempotentConsumer
 
 TOPIC_SHOT_CLASSIFIED = "shot.classified"
+#: The pose-only path's trigger — M06 announces keypoints, and that is all the
+#: pose-only source needs.
+TOPIC_POSE_KEYPOINTS = "pose.keypoints"
 TOPIC_BIOMECHANICS_METRICS = "biomechanics.metrics"
 TOPIC_BIOMECHANICS_DLQ = "biomechanics.dlq"
 CONSUMER_GROUP = "biomechanics-engine"
@@ -114,10 +117,30 @@ async def handle_shot_classified(deps: Deps, envelope: EventEnvelope) -> None:
     )
 
 
+def source_topic_for(deps: Deps) -> str:
+    """Which event triggers a report, given how the stroke source is built.
+
+    Normally M10 waits for ``shot.classified``, because the fan-in wants M09's
+    phases. The pose-only source derives its own phases from wrist motion and
+    reads M06's artefact directly, so it triggers on ``pose.keypoints`` —
+    waiting for a shot event would mean waiting on the stub classifier, the
+    very dependency that path exists to avoid.
+
+    The worker reads this too. It must, or it would subscribe to one topic
+    while the consumer was built for another, and no report would ever appear.
+    """
+    return TOPIC_POSE_KEYPOINTS if deps.settings.use_pose_only_source else TOPIC_SHOT_CLASSIFIED
+
+
+def consumer_group_for(deps: Deps) -> str:
+    """Offsets are per-trigger-topic, so the two modes must not share a group."""
+    return f"{CONSUMER_GROUP}-pose-only" if deps.settings.use_pose_only_source else CONSUMER_GROUP
+
+
 def build_biomechanics_consumer(
     deps: Deps, *, idempotency_store: IdempotencyStore
 ) -> IdempotentConsumer:
-    """Dedupe/retry/DLQ consumer over shot.classified -> biomechanics reports."""
+    """Dedupe/retry/DLQ consumer producing biomechanics reports."""
 
     async def _handler(envelope: EventEnvelope) -> None:
         await handle_shot_classified(deps, envelope)
@@ -126,7 +149,7 @@ def build_biomechanics_consumer(
         bus=deps.event_bus,
         idempotency_store=idempotency_store,
         handler=_handler,
-        source_topic=TOPIC_SHOT_CLASSIFIED,
+        source_topic=source_topic_for(deps),
         dlq_topic=TOPIC_BIOMECHANICS_DLQ,
-        group_id=CONSUMER_GROUP,
+        group_id=consumer_group_for(deps),
     )

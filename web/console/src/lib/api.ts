@@ -39,7 +39,7 @@ function uuid(): string {
   return crypto.randomUUID();
 }
 
-type Svc = "identity" | "profile" | "video" | "pose";
+type Svc = "identity" | "profile" | "video" | "pose" | "biomechanics";
 
 async function request<T>(
   svc: Svc,
@@ -192,6 +192,33 @@ export interface RawUploadResponse {
 }
 
 // --- M06 pose ----------------------------------------------------------------
+// --- M10 biomechanics ---------------------------------------------------------
+export interface MetricEntry {
+  value: number | null;
+  name?: string | null;
+  unit?: string | null;
+  provenance: string;
+  confidence: number | null;
+  provisional?: boolean;
+  disabled_reason?: string | null;
+}
+export interface BiomechanicsReport {
+  correlation_id: string;
+  phase_boundaries: Record<string, number>;
+  phase_method: string;
+  metrics: Record<string, MetricEntry>;
+  quality: {
+    mean_pose_confidence: number;
+    spatial_confidence: string;
+    depth_estimated: boolean;
+    phase_segmentation_method: string;
+    provisional: boolean;
+    fps: number;
+    flags: string[];
+  };
+  provisional: boolean;
+}
+
 export interface PoseRun {
   correlation_id: string;
   person_id: string | null;
@@ -253,4 +280,13 @@ export const api = {
   // pose worker consuming `video.normalized`, so callers poll for it.
   getPose: (correlationId: string) =>
     request<PoseRun>("pose", `/v1/pose/${encodeURIComponent(correlationId)}`, { tenant: true }),
+
+  // M10 (tenant-scoped). Produced by the biomechanics worker consuming
+  // pose.keypoints, so callers poll for it like the pose run.
+  getBiomechanics: (correlationId: string) =>
+    request<BiomechanicsReport>(
+      "biomechanics",
+      `/v1/biomechanics/${encodeURIComponent(correlationId)}`,
+      { tenant: true }
+    ),
 };

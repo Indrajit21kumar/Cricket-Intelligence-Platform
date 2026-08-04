@@ -9,10 +9,12 @@ FastAPI's lifespan wires those calls; route handlers pull dependencies via
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
+from biomechanics_service.domain.pose_artefact_source import PoseOnlyStrokeSource
 from biomechanics_service.domain.sources import FakeStrokeSource, StrokeSource
 from biomechanics_service.settings import ServiceSettings
 from cip_data import build_engine, build_session_factory
@@ -39,7 +41,13 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     event_bus = KafkaEventBus(bootstrap_servers=settings.kafka_bootstrap)
     await event_bus.start()
     idempotency_store = RedisIdempotencyStore(settings.redis_url)
-    stroke_source: StrokeSource = FakeStrokeSource()
+    stroke_source: StrokeSource
+    if settings.use_pose_only_source:
+        stroke_source = PoseOnlyStrokeSource(
+            root=Path(settings.local_storage_root), fps=settings.capture_fps
+        )
+    else:
+        stroke_source = FakeStrokeSource()
     return Deps(
         settings=settings,
         engine=engine,

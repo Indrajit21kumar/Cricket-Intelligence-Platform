@@ -16,7 +16,11 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
-from pose_service.domain.artefact import ArtefactStore, FakeArtefactStore
+from pose_service.domain.artefact import (
+    ArtefactStore,
+    FakeArtefactStore,
+    LocalFilesystemArtefactStore,
+)
 from pose_service.domain.clip import ClipLoader, FakeClipLoader, RealClipLoader
 from pose_service.domain.model import FakePoseModel, PoseModel, RealPoseModel
 from pose_service.settings import ServiceSettings
@@ -48,15 +52,20 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     idempotency_store = RedisIdempotencyStore(settings.redis_url)
     model: PoseModel
     clip_loader: ClipLoader
+    artefact_store: ArtefactStore
     if settings.use_real_pose_model:
         # Loader + model move together: a real model has no pixels to run on
         # unless the loader actually decoded the clip.
         model = RealPoseModel(weights=settings.pose_model_weights)
         clip_loader = RealClipLoader(root=Path(settings.local_storage_root))
+        # A real store too, so biomechanics-service — a separate process —
+        # can read these keypoints. The in-memory fake is invisible outside
+        # this process, which is why M10 had nothing real to consume.
+        artefact_store = LocalFilesystemArtefactStore(root=Path(settings.local_storage_root))
     else:
         model = FakePoseModel()
         clip_loader = FakeClipLoader()
-    artefact_store: ArtefactStore = FakeArtefactStore()
+        artefact_store = FakeArtefactStore()
     return Deps(
         settings=settings,
         engine=engine,
