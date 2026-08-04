@@ -45,6 +45,24 @@ class MetricDef:
     x_axis_dependent: bool = False
     #: True when the value needs the bat (M07); provisional on bat loss.
     bat_dependent: bool = False
+    #: True when the value is an angle in the TOP-DOWN plane, which needs BOTH
+    #: horizontal axes. A single camera resolves only one of them — ``to_cip``
+    #: sets the other to exactly 0.0 — so a top-down angle computed from
+    #: monocular capture is a constant, and the rotation "change" between two
+    #: frames is identically zero. These are DISABLED rather than reported as
+    #: a confident 0.0, which would read as "no rotation" instead of "not
+    #: measurable here". Resolving them needs stereo or a monocular 3D lift.
+    depth_dependent: bool = False
+
+    @property
+    def scale_dependent(self) -> bool:
+        """True when the unit is a physical distance/velocity.
+
+        Without ``metres_per_unit`` the coordinates stay in frame-height units,
+        so such a value would be a number in the wrong unit wearing a metric
+        label (cm, m/s). Disabled rather than published (Book 4 trust doctrine).
+        """
+        return self.metric_class in (CLASS_LINEAR, CLASS_VELOCITY)
 
 
 BM_01 = "BM-01"
@@ -68,10 +86,29 @@ BM_17 = "BM-17"
 CATALOGUE: dict[str, MetricDef] = {
     BM_01: MetricDef(BM_01, "head_stability", "cm", CLASS_LINEAR, expected_range=(0.0, 30.0)),
     BM_02: MetricDef(
-        BM_02, "shoulder_rotation", "deg", CLASS_ANGULAR, expected_range=(-10.0, 120.0)
+        BM_02,
+        "shoulder_rotation",
+        "deg",
+        CLASS_ANGULAR,
+        expected_range=(-10.0, 120.0),
+        depth_dependent=True,
     ),
-    BM_03: MetricDef(BM_03, "hip_rotation", "deg", CLASS_ANGULAR, expected_range=(-10.0, 100.0)),
-    BM_04: MetricDef(BM_04, "x_factor", "deg", CLASS_ANGULAR, expected_range=(-20.0, 80.0)),
+    BM_03: MetricDef(
+        BM_03,
+        "hip_rotation",
+        "deg",
+        CLASS_ANGULAR,
+        expected_range=(-10.0, 100.0),
+        depth_dependent=True,
+    ),
+    BM_04: MetricDef(
+        BM_04,
+        "x_factor",
+        "deg",
+        CLASS_ANGULAR,
+        expected_range=(-20.0, 80.0),
+        depth_dependent=True,
+    ),
     BM_05: MetricDef(BM_05, "pelvic_tilt", "deg", CLASS_ANGULAR, expected_range=(-45.0, 45.0)),
     BM_06: MetricDef(
         BM_06, "front_knee_flexion", "deg", CLASS_ANGULAR, expected_range=(90.0, 180.0)

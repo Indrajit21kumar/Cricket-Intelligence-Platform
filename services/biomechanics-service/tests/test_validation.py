@@ -12,7 +12,7 @@ from dataclasses import replace
 from biomechanics_service.domain.builder import RawBatFrame, RawPoseFrame, RawStroke
 from biomechanics_service.domain.catalogue import (
     BM_01,
-    BM_02,
+    BM_06,
     BM_12,
     BM_17,
     CLASS_ANGULAR,
@@ -106,13 +106,20 @@ class TestAccuracyGate:
         assert report.scored > 0
 
     def test_an_angular_drift_beyond_the_band_is_blocked(self) -> None:
-        """A change that shifts an angular metric > 5 degrees must not ship."""
+        """A change that shifts an angular metric > 5 degrees must not ship.
+
+        Drifts BM-06 (front knee flexion), NOT BM-02. BM-02 is a top-down
+        rotation, which monocular capture cannot resolve, so it is disabled
+        with ``depth_unresolved`` and scores nothing — drifting a null would
+        leave this gate silently proving nothing.
+        """
 
         def drifted(raw: RawStroke) -> BiomechanicsReport:
             report = compute_report(raw)
             metrics = dict(report.metrics)
-            mv = metrics[BM_02]
-            metrics[BM_02] = replace(mv, value=(mv.value or 0.0) + 10.0)
+            mv = metrics[BM_06]
+            assert mv.value is not None, "fixture must supply a live angular metric"
+            metrics[BM_06] = replace(mv, value=mv.value + 10.0)
             return replace(report, metrics=metrics)
 
         result = run_accuracy_gate(_golden(), compute_fn=drifted)
@@ -162,8 +169,9 @@ class TestAccuracyGate:
         def nudged(raw: RawStroke) -> BiomechanicsReport:
             report = compute_report(raw)
             metrics = dict(report.metrics)
-            mv = metrics[BM_02]
-            metrics[BM_02] = replace(mv, value=(mv.value or 0.0) + 2.0)  # < 5 deg
+            mv = metrics[BM_06]  # a live angular metric, not a disabled one
+            assert mv.value is not None
+            metrics[BM_06] = replace(mv, value=mv.value + 2.0)  # < 5 deg
             return replace(report, metrics=metrics)
 
         assert run_accuracy_gate(_golden(), compute_fn=nudged).passed is True
@@ -196,7 +204,10 @@ class TestDeterminism:
         raw = _raw("snap")
         stored = snapshot(raw)
         # Tamper with the stored fingerprint -> the recompute no longer matches.
-        stored[BM_02] = (stored[BM_02] or 0.0) + 1.0
+        # Uses a metric that carries a real value, so the mismatch is a genuine
+        # numeric drift rather than a null-versus-number comparison.
+        assert stored[BM_06] is not None
+        stored[BM_06] = stored[BM_06] + 1.0
         result = check_against_snapshot(raw, stored)
         assert result.deterministic is False
-        assert BM_02 in result.drifted_metrics
+        assert BM_06 in result.drifted_metrics

@@ -168,6 +168,32 @@ def finalise_metrics(
             )
             continue
 
+        # Disable top-down rotation metrics on monocular capture. ``to_cip``
+        # pins one horizontal axis to 0.0 when depth is inferred, so a
+        # top-down angle is a constant and its frame-to-frame change is
+        # identically 0.0. Publishing that would assert "no rotation" when the
+        # truth is "this camera cannot see rotation" (Book 4 trust doctrine).
+        if definition.depth_dependent and cal.depth_estimated:
+            out[metric_id] = MetricValue(
+                value=None,
+                provenance=definition.provenance,
+                confidence=0.0,
+                disabled_reason="depth_unresolved",
+            )
+            continue
+
+        # Disable physical-unit metrics with no metric scale: the coordinates
+        # are still in frame-height units, so the number would wear a cm / m/s
+        # label it has not earned.
+        if definition.scale_dependent and cal.metres_per_unit is None:
+            out[metric_id] = MetricValue(
+                value=None,
+                provenance=definition.provenance,
+                confidence=0.0,
+                disabled_reason="scale_unresolved",
+            )
+            continue
+
         confidence = _SPATIAL_BASE.get(cal.spatial_confidence, 0.5)
         if cal.depth_estimated and definition.metric_class in (CLASS_LINEAR, CLASS_VELOCITY):
             confidence *= _DEPTH_FACTOR
