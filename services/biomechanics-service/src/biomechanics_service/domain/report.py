@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from biomechanics_service.domain.builder import RawStroke, build_normalised_stroke
-from biomechanics_service.domain.catalogue import BM_IDS, SCHEMA_VERSION
+from biomechanics_service.domain.catalogue import BM_IDS, CATALOGUE, SCHEMA_VERSION
 from biomechanics_service.domain.metrics import compute_metrics
 from biomechanics_service.domain.phase_align import align_phases
 from biomechanics_service.domain.quality import (
@@ -45,11 +45,20 @@ class BiomechanicsReport:
     schema_version: str = SCHEMA_VERSION
 
     def metrics_payload(self) -> dict[str, Any]:
-        """The metrics object as stored/published: value + provenance + trust."""
+        """The metrics object as stored/published: value + provenance + trust.
+
+        Carries the catalogue's ``name`` and ``unit`` alongside each value.
+        A consumer showing a number to a coach needs the unit to render it at
+        all, and re-deriving it from the metric id downstream would duplicate
+        the catalogue and let the two drift.
+        """
         payload: dict[str, Any] = {}
         for metric_id, mv in self.metrics.items():
+            definition = CATALOGUE[metric_id]
             entry: dict[str, Any] = {
                 "value": mv.value,
+                "name": definition.name,
+                "unit": definition.unit,
                 "provenance": mv.provenance,
                 "confidence": mv.confidence,
             }

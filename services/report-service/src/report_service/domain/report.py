@@ -16,7 +16,7 @@ Pure function of its inputs: the same ``analysis.reasoned`` + metrics + history
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from report_service.domain.legend import build_legend_view
@@ -49,7 +49,27 @@ class ReportStructure:
     #: Filled in by attach_narrative() after build_report(); None until then.
     narrative_text: str | None = None
     narrative_citations: tuple[str, ...] = ()
+    #: Frame indices for stance/backlift/downswing/impact/follow-through, plus
+    #: the method that produced them. Carried so the reader can see WHICH
+    #: moment each metric was measured at, and whether the timing came from
+    #: ball evidence or from body motion alone.
+    phase_timing: dict[str, Any] = field(default_factory=dict)
     schema_version: str = SCHEMA_VERSION
+
+    @property
+    def delivered_panels(self) -> list[MetricPanelEntry]:
+        """Metrics that carry a real number — what a coach is shown."""
+        return [p for p in self.metric_panels if p.delivered]
+
+    @property
+    def withheld_panels(self) -> list[MetricPanelEntry]:
+        """Metrics that could not be produced, each with the reason why.
+
+        Surfaced rather than dropped: a coach who cannot see X-Factor should
+        learn that it needs a second camera, not silently wonder where it
+        went. Nothing here carries a value.
+        """
+        return [p for p in self.metric_panels if not p.delivered]
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -60,6 +80,11 @@ class ReportStructure:
             "kg_version": self.kg_version,
             "findings": self.findings,
             "metric_panels": [p.to_dict() for p in self.metric_panels],
+            # The same panels split for rendering: what to show, and what to
+            # explain the absence of. Derived, never a second source of truth.
+            "delivered_metrics": [p.to_dict() for p in self.delivered_panels],
+            "withheld_metrics": [p.to_dict() for p in self.withheld_panels],
+            "phase_timing": self.phase_timing,
             "scores": self.scores.to_dict(),
             "match_risk": self.match_risk,
             "provisional": self.provisional,
@@ -88,6 +113,25 @@ def _facts_map(
     return facts
 
 
+def _phase_timing(biomechanics: Mapping[str, Any]) -> dict[str, Any]:
+    """Phase boundaries + the method that produced them, from the M10 payload.
+
+    ``phase_method`` matters to the reader: ``pose_wrist_heuristic`` means the
+    timing came from body motion alone, with no ball evidence behind it.
+    """
+    boundaries = biomechanics.get("phase_boundaries")
+    if not isinstance(boundaries, Mapping):
+        return {}
+    timing: dict[str, Any] = {"boundaries": dict(boundaries)}
+    method = biomechanics.get("phase_method")
+    if method is not None:
+        timing["method"] = str(method)
+    quality = biomechanics.get("quality")
+    if isinstance(quality, Mapping) and quality.get("fps") is not None:
+        timing["fps"] = quality["fps"]
+    return timing
+
+
 def build_report(
     *,
     reasoned: Mapping[str, Any],
@@ -114,6 +158,7 @@ def build_report(
 
     match_risk = reasoned.get("match_risk", {})
     legend_view = build_legend_view(legend_comparison)
+    phase_timing = _phase_timing(biomechanics)
 
     return ReportStructure(
         correlation_id=str(reasoned.get("correlation_id", "")),
@@ -126,6 +171,7 @@ def build_report(
         scores=scores,
         match_risk=match_risk if isinstance(match_risk, dict) else {},
         provisional=bool(reasoned.get("provisional", False)),
+        phase_timing=phase_timing,
         legend_view=legend_view.to_dict() if legend_view is not None else None,
     )
 

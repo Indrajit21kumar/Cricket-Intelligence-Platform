@@ -13,6 +13,25 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+#: Why a metric could not be produced, in words a coach can act on. The keys
+#: are M10's ``disabled_reason`` slugs; anything unmapped falls back to the raw
+#: slug rather than being hidden, so a new reason cannot silently vanish.
+WITHHELD_EXPLANATIONS: dict[str, str] = {
+    "depth_unresolved": (
+        "Rotation about the body's vertical axis needs two camera angles. "
+        "A single camera cannot see it, so no value is reported."
+    ),
+    "scale_unresolved": (
+        "No real-world scale was established for this clip, so distances and "
+        "speeds cannot be given in centimetres or metres per second."
+    ),
+    "crease_axis_unresolved": (
+        "The camera angle could not be resolved, so across-the-crease "
+        "measurements are not reliable. Film side-on for these."
+    ),
+    "no_input_data": ("This measurement needs bat tracking, which is not available yet."),
+}
+
 
 @dataclass(frozen=True, slots=True)
 class MetricPanelEntry:
@@ -23,10 +42,26 @@ class MetricPanelEntry:
     confidence: float | None
     provisional: bool = False
     disabled_reason: str | None = None
+    #: Human-readable metric name from the M10 catalogue (e.g. "pelvic_tilt").
+    name: str | None = None
+
+    @property
+    def delivered(self) -> bool:
+        """True when this panel carries a number a coach can actually read."""
+        return self.value is not None
+
+    @property
+    def withheld_explanation(self) -> str | None:
+        """Plain-English reason this metric is absent, for the report."""
+        if self.delivered:
+            return None
+        reason = self.disabled_reason or "no_input_data"
+        return WITHHELD_EXPLANATIONS.get(reason, reason)
 
     def to_dict(self) -> dict[str, Any]:
-        return {
+        entry: dict[str, Any] = {
             "metric_id": self.metric_id,
+            "name": self.name,
             "value": self.value,
             "unit": self.unit,
             "provenance": self.provenance,
@@ -34,6 +69,10 @@ class MetricPanelEntry:
             "provisional": self.provisional,
             "disabled_reason": self.disabled_reason,
         }
+        explanation = self.withheld_explanation
+        if explanation is not None:
+            entry["withheld_explanation"] = explanation
+        return entry
 
 
 def _panel_from_entries(raw: Any, *, unit_key: str = "unit") -> list[MetricPanelEntry]:
@@ -53,6 +92,7 @@ def _panel_from_entries(raw: Any, *, unit_key: str = "unit") -> list[MetricPanel
                 confidence=entry.get("confidence"),
                 provisional=bool(entry.get("provisional", False)),
                 disabled_reason=entry.get("disabled_reason") or entry.get("omitted_reason"),
+                name=entry.get("name"),
             )
         )
     # Stable, readable order: BM ids then PH ids, numerically.
