@@ -15,11 +15,14 @@ the anchor for canary/rollback + the validation gate (ENG-007).
 from __future__ import annotations
 
 import math
+from collections.abc import Sequence
+from pathlib import Path
 from typing import Protocol
 
 from pose_service.domain.keypoints import (
     CANONICAL_JOINTS,
     FrameDetections,
+    FrameImage,
     Keypoint,
     PersonDetection,
 )
@@ -37,8 +40,20 @@ class PoseModel(Protocol):
         """Registry version pinned to this model."""
         ...
 
-    def infer(self, *, frame_count: int, width: int, height: int) -> list[FrameDetections]:
-        """Run the model over the clip's frames, returning raw per-frame detections."""
+    def infer(
+        self,
+        *,
+        frame_count: int,
+        width: int,
+        height: int,
+        frames: Sequence[FrameImage] | None = None,
+    ) -> list[FrameDetections]:
+        """Run the model over the clip's frames, returning raw per-frame detections.
+
+        ``frames`` carries the decoded pixels when the clip loader actually
+        read the video. It is optional because the fake model synthesises a
+        skeleton from geometry alone; a real model requires it.
+        """
         ...
 
 
@@ -80,8 +95,16 @@ class FakePoseModel:
         if comparable is not None:
             self.comparable = comparable
 
-    def infer(self, *, frame_count: int, width: int, height: int) -> list[FrameDetections]:
-        frames: list[FrameDetections] = []
+    def infer(
+        self,
+        *,
+        frame_count: int,
+        width: int,
+        height: int,
+        frames: Sequence[FrameImage] | None = None,
+    ) -> list[FrameDetections]:
+        _ = frames  # the fake synthesises from geometry; it reads no pixels
+        detections: list[FrameDetections] = []
         for f in range(frame_count):
             phase = (f / max(frame_count - 1, 1)) * math.pi  # 0..pi across the clip
             persons: list[PersonDetection] = []
@@ -107,8 +130,8 @@ class FakePoseModel:
                         primary=(p == 0 or self.comparable),
                     )
                 )
-            frames.append(FrameDetections(frame_index=f, persons=tuple(persons)))
-        return frames
+            detections.append(FrameDetections(frame_index=f, persons=tuple(persons)))
+        return detections
 
     def _person(
         self, *, cx: float, cy: float, scale: float, phase: float, primary: bool
@@ -150,3 +173,70 @@ class FakePoseModel:
             cy=cy,
             area=area,
         )
+
+
+class RealPoseModel:
+    """YOLOv8-pose (ultralytics) over the clip's real decoded frames.
+
+    YOLOv8-pose is COCO-trained and emits its 17 keypoints in exactly the
+    order of :data:`CANONICAL_JOINTS`, so the mapping is positional — no
+    remapping table, no silent joint-order bug.
+
+    Everything downstream of this class (subject tracking, CIP-frame
+    normalisation, confidence aggregation, quality policy) is unchanged: this
+    only replaces where the detections come from.
+    """
+
+    def __init__(self, *, weights: str = "yolov8n-pose.pt") -> None:
+        from ultralytics import YOLO  # lazy: only the real path needs ultralytics
+
+        self._model = YOLO(weights)
+        self._version = f"real-pose-yolov8-{Path(weights).stem}"
+
+    @property
+    def version(self) -> str:
+        return self._version
+
+    def infer(
+        self,
+        *,
+        frame_count: int,
+        width: int,
+        height: int,
+        frames: Sequence[FrameImage] | None = None,
+    ) -> list[FrameDetections]:
+        _ = (frame_count, width, height)  # geometry comes from the frames themselves
+        if frames is None:
+            raise ValueError("RealPoseModel needs decoded frames — pair it with RealClipLoader.")
+        return [
+            FrameDetections(frame_index=i, persons=self._detect(frame))
+            for i, frame in enumerate(frames)
+        ]
+
+    def _detect(self, frame: FrameImage) -> tuple[PersonDetection, ...]:
+        result = self._model(frame, verbose=False)[0]
+        if result.keypoints is None or result.boxes is None:
+            return ()
+        xy, conf, boxes = result.keypoints.xy, result.keypoints.conf, result.boxes
+        persons: list[PersonDetection] = []
+        for p in range(len(boxes)):
+            keypoints = tuple(
+                Keypoint(
+                    joint=joint,
+                    x=float(xy[p, j, 0]),
+                    y=float(xy[p, j, 1]),
+                    confidence=float(conf[p, j]) if conf is not None else 0.0,
+                )
+                for j, joint in enumerate(CANONICAL_JOINTS)
+            )
+            x1, y1, x2, y2 = (float(v) for v in boxes.xyxy[p])
+            persons.append(
+                PersonDetection(
+                    keypoints=keypoints,
+                    score=float(boxes.conf[p]),
+                    cx=(x1 + x2) / 2.0,
+                    cy=(y1 + y2) / 2.0,
+                    area=(x2 - x1) * (y2 - y1),
+                )
+            )
+        return tuple(persons)

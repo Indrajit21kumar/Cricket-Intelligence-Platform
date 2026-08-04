@@ -147,6 +147,19 @@ disallow_untyped_decorators = false
 module = ["aiokafka", "aiokafka.*"]
 ignore_missing_imports = true
 
+# The real CV/ML stack (video-service + pose-service "real" extra) is an
+# OPTIONAL dependency, so mypy sees it as missing in CI but fully typed on a
+# machine with the extras installed. ``follow_imports = "skip"`` makes both
+# cases behave identically (treat as Any) so the gate can't pass in one place
+# and fail in the other. Same spirit as the aiokafka override: the adapters
+# that touch it are thin, and their output is mapped straight onto typed
+# domain dataclasses.
+[[tool.mypy.overrides]]
+module = ["cv2", "cv2.*", "numpy", "numpy.*", "ultralytics", "ultralytics.*"]
+ignore_missing_imports = true
+follow_imports = "skip"
+follow_imports_for_stubs = true
+
 # ---------------------------------------------------------------------------
 # pytest (Book 3, Ch. 6 §6.1)
 # ---------------------------------------------------------------------------
@@ -160,6 +173,7 @@ addopts = "-ra --strict-markers --strict-config --import-mode=importlib"
 markers = [
     "integration: tests requiring live infra (Postgres, Kafka, Redis)",
     "contract: consumer/provider contract tests (Schemathesis)",
+    "real_model: exercises a real CV/ML adapter; skipped unless the 'real' extra is installed",
 ]
 filterwarnings = [
     # Upstream: FastAPI 0.139 still imports starlette.testclient which now warns.

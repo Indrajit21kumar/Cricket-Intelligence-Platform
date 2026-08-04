@@ -61,6 +61,7 @@ async def process_normalized(
         width=geo.width,
         height=geo.height,
         depth_estimated=depth_estimated,
+        frames=geo.frames,
     )
 
     # Large keypoint sequence -> object storage; DB keeps the summary.

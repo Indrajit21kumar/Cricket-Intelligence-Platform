@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import SettingsConfigDict
@@ -34,6 +35,25 @@ class ServiceSettings(CoreSettings):
     redis_url: str = Field(
         "redis://localhost:6379/0",
         description="Redis URL for the idempotency store",
+    )
+
+    use_real_pipeline: bool = Field(
+        False,
+        description=(
+            "Use local-filesystem storage + the OpenCV processor instead of the "
+            "fakes. Requires the 'real' extra installed."
+        ),
+    )
+    local_storage_root: str = Field(
+        default_factory=lambda: str(Path.home() / ".cip" / "local-storage"),
+        description="Shared local object-storage root (pose-service reads the same path)",
+    )
+    public_base_url: str = Field(
+        "http://127.0.0.1:8003",
+        description=(
+            "Base URL clients reach this service on — used to mint upload URLs. "
+            "8003 matches the port the web console's Vite proxy expects."
+        ),
     )
 
 

@@ -74,3 +74,12 @@ scratch/
 # Web console build artifacts
 web/console/dist/
 web/console/*.tsbuildinfo
+
+# ML model weights — ultralytics downloads these into the working directory on
+# first use. They are large binaries fetched on demand, not source.
+*.pt
+*.onnx
+
+# Local object storage for the real (CIP_USE_REAL_PIPELINE) video path
+.cip/
+local-storage/

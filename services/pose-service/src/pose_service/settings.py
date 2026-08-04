@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from functools import lru_cache
+from pathlib import Path
 
 from pydantic import Field
 from pydantic_settings import SettingsConfigDict
@@ -34,6 +35,22 @@ class ServiceSettings(CoreSettings):
     redis_url: str = Field(
         "redis://localhost:6379/0",
         description="Redis URL for the idempotency store",
+    )
+
+    use_real_pose_model: bool = Field(
+        False,
+        description=(
+            "Decode the real clip and run a real pose model instead of the "
+            "fakes. Requires the 'real' extra installed."
+        ),
+    )
+    local_storage_root: str = Field(
+        default_factory=lambda: str(Path.home() / ".cip" / "local-storage"),
+        description="Shared local object-storage root (video-service writes the same path)",
+    )
+    pose_model_weights: str = Field(
+        "yolov8n-pose.pt",
+        description="Ultralytics weights for the real pose model",
     )
 
 

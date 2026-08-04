@@ -9,6 +9,7 @@ FastAPI's lifespan wires those calls; route handlers pull dependencies via
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -16,8 +17,8 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
 from pose_service.domain.artefact import ArtefactStore, FakeArtefactStore
-from pose_service.domain.clip import ClipLoader, FakeClipLoader
-from pose_service.domain.model import FakePoseModel, PoseModel
+from pose_service.domain.clip import ClipLoader, FakeClipLoader, RealClipLoader
+from pose_service.domain.model import FakePoseModel, PoseModel, RealPoseModel
 from pose_service.settings import ServiceSettings
 
 
@@ -45,8 +46,16 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     event_bus = KafkaEventBus(bootstrap_servers=settings.kafka_bootstrap)
     await event_bus.start()
     idempotency_store = RedisIdempotencyStore(settings.redis_url)
-    model: PoseModel = FakePoseModel()
-    clip_loader: ClipLoader = FakeClipLoader()
+    model: PoseModel
+    clip_loader: ClipLoader
+    if settings.use_real_pose_model:
+        # Loader + model move together: a real model has no pixels to run on
+        # unless the loader actually decoded the clip.
+        model = RealPoseModel(weights=settings.pose_model_weights)
+        clip_loader = RealClipLoader(root=Path(settings.local_storage_root))
+    else:
+        model = FakePoseModel()
+        clip_loader = FakeClipLoader()
     artefact_store: ArtefactStore = FakeArtefactStore()
     return Deps(
         settings=settings,

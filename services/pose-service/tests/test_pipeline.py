@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 from pose_service.domain.keypoints import (
     CANONICAL_JOINTS,
     QUALITY_OK,
@@ -9,6 +11,7 @@ from pose_service.domain.keypoints import (
     QUALITY_REJECTED,
     SUBJECT_MULTI_AMBIGUOUS,
     SUBJECT_TRACKED,
+    FrameImage,
 )
 from pose_service.domain.model import MODEL_VERSION, FakePoseModel
 from pose_service.domain.pipeline import compute_pose_run
@@ -58,7 +61,14 @@ class TestRejected:
         class TwoEqualModel:
             version = MODEL_VERSION
 
-            def infer(self, *, frame_count: int, width: int, height: int) -> list[FrameDetections]:
+            def infer(
+                self,
+                *,
+                frame_count: int,
+                width: int,
+                height: int,
+                frames: Sequence[FrameImage] | None = None,
+            ) -> list[FrameDetections]:
                 a, b = person(width * 0.45), person(width * 0.55)
                 return [FrameDetections(frame_index=i, persons=(a, b)) for i in range(frame_count)]
 

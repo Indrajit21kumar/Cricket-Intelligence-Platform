@@ -13,6 +13,12 @@ dependencies = [
     "uvicorn[standard]>=0.32",
 ]
 
+# Opt-in extra for the real (non-fake) preprocessing path. Kept out of the
+# base dependencies so CI never installs a CV stack it does not need — the
+# default binding is still FakeVideoProcessor/FakeStorageProvider.
+[project.optional-dependencies]
+real = ["opencv-python-headless>=4.10"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

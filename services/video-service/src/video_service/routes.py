@@ -9,6 +9,7 @@ and is the idempotency anchor.
 
 Endpoints:
   POST /v1/videos              create ingestion + return a signed upload URL
+  PUT  /v1/videos/{id}/raw       receive raw bytes (local-storage backend only)
   POST /v1/videos/{id}/complete  mark upload complete
   GET  /v1/videos/{id}          ingestion status
 
@@ -22,7 +23,7 @@ import uuid
 from datetime import datetime
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
 
 from cip_core import (
@@ -40,8 +41,10 @@ from cip_events import EventEnvelope
 from video_service.deps import Deps, get_deps
 from video_service.domain.calibrations import get_calibration
 from video_service.domain.ingestions import (
+    STATUS_UPLOADED,
     create_ingestion,
     get_ingestion,
+    set_status,
 )
 from video_service.domain.pipeline import run_pipeline
 from video_service.domain.processing_results import get_processing_result
@@ -180,6 +183,35 @@ async def create_video(
         expires_in=signed.expires_in,
         status=str(row["status"]),
     )
+
+
+class RawUploadResponse(BaseModel):
+    ingestion_id: uuid.UUID
+    bytes_received: int
+
+
+@videos_router.put("/{ingestion_id}/raw", response_model=RawUploadResponse)
+async def upload_raw_bytes(
+    ingestion_id: uuid.UUID,
+    request: Request,
+    principal: Annotated[AuthenticatedPrincipal, Depends(require_authenticated)],
+    deps: Annotated[Deps, Depends(get_deps)],
+) -> RawUploadResponse:
+    """Receive the raw clip's bytes (local-storage backend only, FR-M05-01).
+
+    The signed ``upload_url`` a real cloud backend issues points at the cloud
+    provider directly; :class:`LocalFilesystemStorageProvider` instead points
+    it back here, so this route is what actually persists the bytes.
+    """
+    _ = principal
+    tenant_id = require_tenant_id()
+    async with tenant_session(deps.session_factory, tenant_id=tenant_id) as session:
+        ingestion = await get_ingestion(session, ingestion_id)
+        if ingestion is None:
+            raise NotFound("Ingestion not found")
+        n = await deps.storage.receive_upload(str(ingestion["raw_ref"]), request.stream())
+        await set_status(session, ingestion_id, STATUS_UPLOADED)
+    return RawUploadResponse(ingestion_id=ingestion_id, bytes_received=n)
 
 
 class QualityFlagView(BaseModel):

@@ -9,6 +9,7 @@ FastAPI's lifespan wires those calls; route handlers pull dependencies via
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
@@ -16,9 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 from cip_data import build_engine, build_session_factory
 from cip_events import KafkaEventBus, RedisIdempotencyStore
 from video_service.domain.entitlement import EntitlementClient, FakeEntitlementClient
-from video_service.domain.processor import FakeVideoProcessor, VideoProcessor
+from video_service.domain.processor import FakeVideoProcessor, RealVideoProcessor, VideoProcessor
 from video_service.domain.profile_client import FakeProfileClient, ProfileClient
-from video_service.domain.storage import FakeStorageProvider, StorageProvider
+from video_service.domain.storage import (
+    FakeStorageProvider,
+    LocalFilesystemStorageProvider,
+    StorageProvider,
+)
 from video_service.settings import ServiceSettings
 
 
@@ -48,9 +53,20 @@ async def build_deps(settings: ServiceSettings) -> Deps:
     event_bus = KafkaEventBus(bootstrap_servers=settings.kafka_bootstrap)
     await event_bus.start()
     idempotency_store = RedisIdempotencyStore(settings.redis_url)
-    storage: StorageProvider = FakeStorageProvider()
+    storage: StorageProvider
+    video_processor: VideoProcessor
+    if settings.use_real_pipeline:
+        # Storage + processor move together: a real processor has nothing to
+        # decode unless real bytes actually landed on disk.
+        root = Path(settings.local_storage_root)
+        storage = LocalFilesystemStorageProvider(
+            root=root, public_base_url=settings.public_base_url
+        )
+        video_processor = RealVideoProcessor(root=root)
+    else:
+        storage = FakeStorageProvider()
+        video_processor = FakeVideoProcessor()
     entitlement_client: EntitlementClient = FakeEntitlementClient()
-    video_processor: VideoProcessor = FakeVideoProcessor()
     profile_client: ProfileClient = FakeProfileClient()
     return Deps(
         settings=settings,

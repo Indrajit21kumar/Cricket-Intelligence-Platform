@@ -14,10 +14,11 @@ orchestration is unchanged.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from pose_service.domain.confidence import aggregate_confidence, resolve_quality
-from pose_service.domain.keypoints import Keypoint
+from pose_service.domain.keypoints import FrameImage, Keypoint
 from pose_service.domain.model import PoseModel
 from pose_service.domain.normalise import normalise
 from pose_service.domain.tracking import select_primary_subject
@@ -47,6 +48,7 @@ def compute_pose_run(
     width: int,
     height: int,
     depth_estimated: bool = True,
+    frames: Sequence[FrameImage] | None = None,
 ) -> PoseRunResult:
     """Run the full pose pipeline over a clip's frame geometry.
 
@@ -54,8 +56,15 @@ def compute_pose_run(
     M05 knows whether the clip was monocular and says so on
     ``video.normalized``; M06 carries that truth through rather than
     re-deciding it (Book 4 Ch. 2).
+
+    ``frames`` carries decoded pixels when a real clip loader read the video.
+    It is only forwarded when present, so a geometry-only model keeps the
+    signature it has always had.
     """
-    detections = model.infer(frame_count=frame_count, width=width, height=height)
+    if frames is None:
+        detections = model.infer(frame_count=frame_count, width=width, height=height)
+    else:
+        detections = model.infer(frame_count=frame_count, width=width, height=height, frames=frames)
     tracking = select_primary_subject(detections, width=float(width))
 
     # Rejected (multi/no subject): emit nothing usable but report why.

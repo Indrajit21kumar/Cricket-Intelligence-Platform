@@ -5,18 +5,27 @@ frame-extracted, denoised, lighting-corrected) AND measures the signals the
 rest of the pipeline reasons over: media metadata, quality signals (blur,
 exposure, framing), and calibration/angle hints.
 
-This is the "fake CV, real decision logic" seam: a real ffmpeg/OpenCV
-processor plugs into :class:`VideoProcessor` later, but the angle classifier
+This is the "fake CV, real decision logic" seam: the angle classifier
 (Step 4), calibration (Step 5), and quality gate (Step 6) are REAL code that
 operate on the :class:`ClipMeasurements` envelope the processor yields — so
-they are unit-testable without any video. Step 3 ships a deterministic
-:class:`FakeVideoProcessor`; the dev stack has no ffmpeg/OpenCV.
+they are unit-testable without any video, against the deterministic
+:class:`FakeVideoProcessor` (still the default).
+
+:class:`RealVideoProcessor` is the OpenCV-backed implementation: it decodes
+the actual uploaded clip and measures what can honestly be measured without a
+cricket-specific detector. It is opt-in (``CIP_USE_REAL_PIPELINE``) and needs
+the ``real`` extra installed.
 """
 
 from __future__ import annotations
 
+import asyncio
+import shutil
 from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Protocol
+
+from video_service.domain.angle import ANGLE_UNKNOWN
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,3 +114,107 @@ class FakeVideoProcessor:
         measurements = self.next_measurements or _good_clip()
         self.next_measurements = None  # one-shot, like M03's fail_next
         return PreprocessResult(normalized_ref=normalized_key(raw_ref), measurements=measurements)
+
+
+# --- Real (OpenCV) processor -------------------------------------------------
+
+#: Laplacian-variance scale for the blur mapping. First-pass constant: a clip
+#: whose sampled variance equals this reads as blur_score 0.5 (the gate's
+#: marginal band). Recalibrate against real academy footage before relying on
+#: the flag/fail boundaries in anger.
+BLUR_VARIANCE_SCALE = 150.0
+
+#: Frames sampled for the blur/exposure statistics (the frame COUNT is always
+#: exact — every frame is read; only the CV statistics are sampled).
+QUALITY_SAMPLE_FRAMES = 24
+
+#: Fallback when the container reports no usable frame rate.
+FALLBACK_FPS = 30.0
+
+#: batter_in_frame is NOT measured — no person/bat detector exists in M05.
+#: Set just above the gate's flag threshold so an otherwise-good clip isn't
+#: flagged for something that was never actually checked.
+ASSUMED_BATTER_IN_FRAME = 0.95
+
+
+class RealVideoProcessor:
+    """OpenCV-backed processor reading the real uploaded clip.
+
+    Genuinely measured: geometry, frame rate, frame count, duration, blur
+    (Laplacian variance) and exposure (mean luma). Deliberately NOT measured
+    and reported as unknown rather than invented: stump visibility, stump and
+    player pixel heights, and the camera angle — those need a detector M05
+    does not have, and :mod:`video_service.domain.calibration` /
+    :mod:`video_service.domain.angle` already degrade honestly when they are
+    absent.
+
+    "Normalisation" here is an identity copy of the validated bytes to the
+    normalised key. Real stabilisation / denoise / lighting correction is
+    still outstanding; this does not pretend otherwise.
+    """
+
+    def __init__(self, *, root: Path) -> None:
+        self._root = root
+
+    async def preprocess(self, *, raw_ref: str) -> PreprocessResult:
+        normalized_ref = normalized_key(raw_ref)
+        measurements = await asyncio.to_thread(self._measure, self._root / raw_ref)
+        await asyncio.to_thread(self._copy_to_normalized, raw_ref, normalized_ref)
+        return PreprocessResult(normalized_ref=normalized_ref, measurements=measurements)
+
+    def _copy_to_normalized(self, raw_ref: str, normalized_ref: str) -> None:
+        dest = self._root / normalized_ref
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(self._root / raw_ref, dest)
+
+    def _measure(self, path: Path) -> ClipMeasurements:
+        import cv2  # lazy: only the real path needs OpenCV installed
+
+        cap = cv2.VideoCapture(str(path), cv2.CAP_FFMPEG)
+        if not cap.isOpened():
+            raise ValueError(f"Could not open video for decoding: {path.name}")
+        try:
+            width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            reported_fps = float(cap.get(cv2.CAP_PROP_FPS))
+            fps = reported_fps if reported_fps > 0 else FALLBACK_FPS
+            # CAP_PROP_FRAME_COUNT is unreliable for VFR/streamed containers,
+            # so count by decoding. Sample the CV statistics as we go.
+            frame_count = 0
+            sample_stride = max(1, int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) // QUALITY_SAMPLE_FRAMES)
+            blur_variances: list[float] = []
+            luma_means: list[float] = []
+            while True:
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                if frame_count % sample_stride == 0 and len(blur_variances) < QUALITY_SAMPLE_FRAMES:
+                    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+                    blur_variances.append(float(cv2.Laplacian(gray, cv2.CV_64F).var()))
+                    luma_means.append(float(gray.mean()))
+                frame_count += 1
+        finally:
+            cap.release()
+
+        if frame_count == 0:
+            raise ValueError(f"Video contained no decodable frames: {path.name}")
+
+        mean_variance = sum(blur_variances) / len(blur_variances) if blur_variances else 0.0
+        mean_luma = sum(luma_means) / len(luma_means) if luma_means else 0.0
+        return ClipMeasurements(
+            width=width,
+            height=height,
+            fps=fps,
+            frame_count=frame_count,
+            duration_s=frame_count / fps,
+            blur_score=1.0 / (1.0 + mean_variance / BLUR_VARIANCE_SCALE),
+            exposure=mean_luma / 255.0,
+            batter_in_frame=ASSUMED_BATTER_IN_FRAME,
+            stump_visible=False,
+            stump_pixel_height=None,
+            player_pixel_height=None,
+            # No angle classifier exists in M05 — say "not measured" rather than
+            # "other", which would read downstream as a real square/odd angle.
+            angle_hint=ANGLE_UNKNOWN,
+            angle_confidence=0.0,
+        )

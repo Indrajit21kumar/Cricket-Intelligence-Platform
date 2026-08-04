@@ -6,7 +6,9 @@ model that regresses keypoint accuracy beyond tolerance is BLOCKED.
 
 from __future__ import annotations
 
-from pose_service.domain.keypoints import FrameDetections, Keypoint, PersonDetection
+from collections.abc import Sequence
+
+from pose_service.domain.keypoints import FrameDetections, FrameImage, Keypoint, PersonDetection
 from pose_service.domain.model import MODEL_VERSION, FakePoseModel
 from pose_service.domain.validation import (
     DEFAULT_TOLERANCE,
@@ -32,10 +34,17 @@ class RegressedModel:
         self._shift = shift_px
         self._base = FakePoseModel()
 
-    def infer(self, *, frame_count: int, width: int, height: int) -> list[FrameDetections]:
-        frames = self._base.infer(frame_count=frame_count, width=width, height=height)
+    def infer(
+        self,
+        *,
+        frame_count: int,
+        width: int,
+        height: int,
+        frames: Sequence[FrameImage] | None = None,
+    ) -> list[FrameDetections]:
+        base = self._base.infer(frame_count=frame_count, width=width, height=height)
         out: list[FrameDetections] = []
-        for fr in frames:
+        for fr in base:
             persons = tuple(
                 PersonDetection(
                     keypoints=tuple(
@@ -63,7 +72,14 @@ class RejectingModel:
 
     version = "broken-vX"
 
-    def infer(self, *, frame_count: int, width: int, height: int) -> list[FrameDetections]:
+    def infer(
+        self,
+        *,
+        frame_count: int,
+        width: int,
+        height: int,
+        frames: Sequence[FrameImage] | None = None,
+    ) -> list[FrameDetections]:
         return [FrameDetections(frame_index=i, persons=()) for i in range(frame_count)]
 
 

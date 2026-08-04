@@ -155,6 +155,43 @@ class TestUploadFlow:
         assert first.json()["ingestion_id"] == second.json()["ingestion_id"]
 
 
+class TestRawUpload:
+    """PUT /v1/videos/{id}/raw — the route the local-storage backend's
+    ``upload_url`` points at. Exercised here against the default fake, which
+    counts bytes without writing them."""
+
+    async def test_receives_bytes_and_marks_uploaded(
+        self, app_client: tuple[FastAPI, httpx.AsyncClient], tenant_id: uuid.UUID
+    ) -> None:
+        app, client = app_client
+        created = (
+            await client.post("/v1/videos", headers=_headers(tenant_id), json=_body())
+        ).json()
+        payload = b"\x00\x01\x02" * 100
+        r = await client.put(
+            f"/v1/videos/{created['ingestion_id']}/raw",
+            headers=_headers(tenant_id),
+            content=payload,
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["bytes_received"] == len(payload)
+        assert app.state.deps.storage.received[created["raw_ref"]] == len(payload)
+
+        status = await client.get(
+            f"/v1/videos/{created['ingestion_id']}", headers=_headers(tenant_id)
+        )
+        assert status.json()["status"] == "uploaded"
+
+    async def test_unknown_ingestion_404(
+        self, app_client: tuple[FastAPI, httpx.AsyncClient], tenant_id: uuid.UUID
+    ) -> None:
+        _app, client = app_client
+        r = await client.put(
+            f"/v1/videos/{uuid.uuid4()}/raw", headers=_headers(tenant_id), content=b"xyz"
+        )
+        assert r.status_code == 404
+
+
 class TestValidationRejection:
     async def test_unsupported_content_type_422(
         self, app_client: tuple[FastAPI, httpx.AsyncClient], tenant_id: uuid.UUID

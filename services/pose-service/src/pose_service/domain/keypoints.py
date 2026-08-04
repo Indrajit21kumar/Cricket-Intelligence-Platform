@@ -14,6 +14,12 @@ Step 4 (0..1 of frame width/height); before normalisation they are raw pixels.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
+
+#: One decoded video frame (an OpenCV/numpy H x W x 3 BGR array). Kept as
+#: ``Any`` so the adapter layer never forces numpy/OpenCV onto callers — the
+#: fake path passes no frames at all.
+FrameImage = Any
 
 # The 17 canonical COCO joints, in a fixed order (index == downstream contract).
 CANONICAL_JOINTS: tuple[str, ...] = (
