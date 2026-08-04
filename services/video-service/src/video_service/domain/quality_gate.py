@@ -22,8 +22,16 @@ from video_service.domain.angle import AngleResult
 from video_service.domain.processor import ClipMeasurements
 
 # --- Shared thresholds (gate + capture guidance) -----------------------------
-MIN_WIDTH = 1280
-MIN_HEIGHT = 720
+# Resolution is checked ORIENTATION-AGNOSTICALLY: the clip must have at least
+# MIN_SHORT_SIDE on its shorter edge and MIN_LONG_SIDE on its longer edge.
+# Phones default to portrait, and a 1080x1920 portrait clip carries 2.25x the
+# pixels of 1280x720 — comparing width-to-1280 would reject it as "too low",
+# which is both wrong and baffling to the person who filmed it.
+MIN_LONG_SIDE = 1280
+MIN_SHORT_SIDE = 720
+#: Back-compat aliases — the landscape reading of the same limits.
+MIN_WIDTH = MIN_LONG_SIDE
+MIN_HEIGHT = MIN_SHORT_SIDE
 FPS_FAIL_BELOW = 24.0
 FPS_FLAG_BELOW = 30.0
 BLUR_FAIL_ABOVE = 0.6  # blur_score 0=sharp .. 1=very blurry
@@ -63,14 +71,29 @@ def run_quality_gate(*, measurements: ClipMeasurements, angle: AngleResult) -> G
     m = measurements
     flags: list[GateFlag] = []
 
-    # Resolution.
-    if m.width < MIN_WIDTH or m.height < MIN_HEIGHT:
+    # Resolution — orientation-agnostic, so portrait phone video is judged on
+    # pixels rather than on which edge happens to be the wider one.
+    short_side, long_side = min(m.width, m.height), max(m.width, m.height)
+    if short_side < MIN_SHORT_SIDE or long_side < MIN_LONG_SIDE:
         flags.append(
             GateFlag(
                 "resolution_too_low",
                 SEVERITY_FAIL,
                 f"Video resolution {m.width}x{m.height} is below the "
-                f"{MIN_WIDTH}x{MIN_HEIGHT} minimum. Record in 720p or higher.",
+                f"{MIN_LONG_SIDE}x{MIN_SHORT_SIDE} minimum. Record in 720p or higher. "
+                "If you shared this clip through WhatsApp or a similar app it was "
+                "compressed on the way — upload the original from your phone's gallery.",
+            )
+        )
+    elif m.height > m.width:
+        # Enough pixels, but a cricket stroke travels horizontally, so portrait
+        # crops the axis the analysis most needs. Advice, not a rejection.
+        flags.append(
+            GateFlag(
+                "portrait_orientation",
+                SEVERITY_FLAG,
+                "Filmed in portrait — turn the phone sideways (landscape) so the "
+                "whole stroke and follow-through stay in frame.",
             )
         )
 
@@ -156,20 +179,44 @@ def run_quality_gate(*, measurements: ClipMeasurements, angle: AngleResult) -> G
             )
         )
 
-    # Duration.
-    if m.duration_s < DURATION_MIN_S or m.duration_s > DURATION_MAX_S:
+    # Duration. Analysis is per-stroke, so a full innings or net session has to
+    # be trimmed rather than analysed whole — say which way it is wrong.
+    if m.duration_s > DURATION_MAX_S:
         flags.append(
             GateFlag(
                 "duration_out_of_range",
                 SEVERITY_FAIL,
-                f"Clip length {m.duration_s:.1f}s should be between "
-                f"{DURATION_MIN_S:.0f}s and {DURATION_MAX_S:.0f}s and contain "
-                "one complete stroke.",
+                f"This clip is {m.duration_s:.0f}s long. Analysis works on one "
+                f"stroke at a time — trim it to a {DURATION_MIN_S:.0f}-"
+                f"{DURATION_MAX_S:.0f}s section starting just before the "
+                "bowler releases and ending after the follow-through.",
+            )
+        )
+    elif m.duration_s < DURATION_MIN_S:
+        flags.append(
+            GateFlag(
+                "duration_out_of_range",
+                SEVERITY_FAIL,
+                f"This clip is only {m.duration_s:.1f}s long — too short to contain "
+                "a full stroke. Start recording before the bowler releases and keep "
+                "going through the follow-through (about 5-10s).",
             )
         )
 
     # Camera angle — soft flag only (proceed with low confidence, §5.1).
-    if not angle.supported:
+    # When no classifier ran, this is a capability gap rather than a fault in
+    # the clip, so it is reported under its own code. Telling every single
+    # uploader to re-film for an angle nothing measured just teaches them to
+    # ignore the flags that do matter.
+    if not angle.assessed:
+        flags.append(
+            GateFlag(
+                "camera_angle_not_assessed",
+                SEVERITY_FLAG,
+                angle.recommendation or "Camera angle isn't analysed yet.",
+            )
+        )
+    elif not angle.supported:
         flags.append(
             GateFlag(
                 "unsupported_camera_angle",
