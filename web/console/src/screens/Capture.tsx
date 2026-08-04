@@ -3,8 +3,15 @@
 // on-device guidance and the post-upload result agree (UX-04). A rejected clip
 // gets a specific, non-punitive re-film prompt from the gate's own reasons
 // (AC-UX-04).
-import { useEffect, useState } from "react";
-import { api, CipError, type CaptureGuidance, type CompleteResponse, type QualityFlag } from "../lib/api";
+import { useEffect, useRef, useState } from "react";
+import {
+  api,
+  CipError,
+  type CaptureGuidance,
+  type CompleteResponse,
+  type PoseRun,
+  type QualityFlag,
+} from "../lib/api";
 import { useSession } from "../lib/session";
 import {
   Button,
@@ -22,40 +29,95 @@ import {
 
 type Stage = "guidance" | "working" | "admitted" | "rejected";
 
+// The pose run is produced asynchronously by the pose worker consuming
+// `video.normalized`, so the clip is admitted before the run exists. Real
+// pose inference is per-frame on CPU — a few seconds of footage takes tens of
+// seconds — so the budget is generous; after it, say so honestly rather than
+// hang or imply failure.
+const POSE_POLL_ATTEMPTS = 90;
+const POSE_POLL_INTERVAL_MS = 1000;
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+async function pollPose(correlationId: string): Promise<PoseRun | null> {
+  for (let i = 0; i < POSE_POLL_ATTEMPTS; i++) {
+    try {
+      return await api.getPose(correlationId);
+    } catch (e) {
+      if (!(e instanceof CipError) || e.status !== 404) throw e;
+      await sleep(POSE_POLL_INTERVAL_MS);
+    }
+  }
+  return null;
+}
+
 export function Capture() {
   const { me, tenantId } = useSession();
   const [guidance, setGuidance] = useState<CaptureGuidance | null>(null);
   const [gErr, setGErr] = useState<string | null>(null);
   const [stage, setStage] = useState<Stage>("guidance");
   const [sourceType, setSourceType] = useState("mobile");
-  const [contentType, setContentType] = useState("video/mp4");
+  const [file, setFile] = useState<File | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
   const [result, setResult] = useState<CompleteResponse | null>(null);
+  const [pose, setPose] = useState<PoseRun | null>(null);
+  const [posePending, setPosePending] = useState(false);
   const [rejectFlags, setRejectFlags] = useState<QualityFlag[]>([]);
   const [rejectReasons, setRejectReasons] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.captureGuidance().then(setGuidance).catch((e) => setGErr(e instanceof CipError ? e.message : "Failed to load guidance"));
   }, []);
 
+  const reset = () => {
+    setStage("guidance");
+    setFile(null);
+    setPose(null);
+    setPosePending(false);
+    setProgress(null);
+    if (fileInput.current) fileInput.current.value = "";
+  };
+
   const analyse = async () => {
-    if (!me) return;
+    if (!me || !file) return;
     setStage("working");
     setError(null);
+    setPose(null);
+    setPosePending(false);
     setRejectFlags([]);
     setRejectReasons([]);
     try {
       const correlationId = crypto.randomUUID();
+      // The real file's own type + size — the server validates both.
+      setProgress("Creating the ingestion…");
       const created = await api.createVideo(
-        { person_id: me.person_id, source_type: sourceType, content_type: contentType, size_bytes: 4_000_000 },
+        {
+          person_id: me.person_id,
+          source_type: sourceType,
+          content_type: file.type || "video/mp4",
+          size_bytes: file.size,
+        },
         correlationId
       );
-      // With the dev fake storage the object is present on create, so we go
-      // straight to /complete (a real client PUTs to created.upload_url first).
+
+      setProgress(`Uploading ${formatBytes(file.size)}…`);
+      await api.uploadRaw(created.ingestion_id, file);
+
+      setProgress("Preprocessing, calibrating, and running the quality gate…");
       const done = await api.completeVideo(created.ingestion_id);
       setResult(done);
       setStage("admitted");
+
+      // Admitted -> M06 runs off the published event. Surface the real run.
+      setPosePending(true);
+      setProgress(null);
+      const run = await pollPose(correlationId);
+      setPose(run);
+      setPosePending(false);
     } catch (e) {
+      setProgress(null);
       if (e instanceof CipError && e.status === 422) {
         const flags = (e.details?.flags as QualityFlag[] | undefined) ?? [];
         const reasons = (e.details?.reasons as string[] | undefined) ?? [];
@@ -99,9 +161,29 @@ export function Capture() {
         <Card>
           <SectionTitle>Upload</SectionTitle>
           <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block sm:col-span-2">
+              <span className="mb-1 block text-sm font-medium text-slate-700">Video file</span>
+              <input
+                ref={fileInput}
+                type="file"
+                accept="video/*"
+                disabled={stage === "working"}
+                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+                className="block w-full rounded-lg border border-slate-300 text-sm text-slate-600 file:mr-3 file:cursor-pointer file:rounded-l-lg file:border-0 file:bg-brand-50 file:px-4 file:py-2 file:text-sm file:font-semibold file:text-brand-700 hover:file:bg-brand-100 focus:outline-none focus:ring-2 focus:ring-brand-500 disabled:opacity-60"
+              />
+              <span className="mt-1 block text-xs text-slate-500">
+                {file
+                  ? `${file.name} · ${formatBytes(file.size)} · ${file.type || "unknown type"}`
+                  : "Pick the clip to analyse — one complete stroke, MP4/MOV/WebM."}
+              </span>
+            </label>
             <label className="block">
               <span className="mb-1 block text-sm font-medium text-slate-700">Source</span>
-              <Select value={sourceType} onChange={(e) => setSourceType(e.target.value)}>
+              <Select
+                value={sourceType}
+                disabled={stage === "working"}
+                onChange={(e) => setSourceType(e.target.value)}
+              >
                 {["mobile", "dslr", "nets", "match"].map((s) => (
                   <option key={s} value={s}>
                     {s}
@@ -109,29 +191,22 @@ export function Capture() {
                 ))}
               </Select>
             </label>
-            <label className="block">
-              <span className="mb-1 block text-sm font-medium text-slate-700">Format</span>
-              <Select value={contentType} onChange={(e) => setContentType(e.target.value)}>
-                <option value="video/mp4">MP4</option>
-                <option value="video/quicktime">MOV</option>
-                <option value="video/webm">WebM</option>
-                <option value="image/gif">GIF (unsupported — will be rejected)</option>
-              </Select>
-            </label>
           </div>
           {error ? <p className="mt-3 rounded-lg bg-attention-bg px-3 py-2 text-sm text-attention-fg">{error}</p> : null}
           <div className="mt-4">
-            <Button onClick={analyse} disabled={stage === "working"}>
+            <Button onClick={analyse} disabled={stage === "working" || !file}>
               {stage === "working" ? "Analysing…" : "Upload & analyse"}
             </Button>
           </div>
-          {stage === "working" ? <Loading label="Preprocessing, calibrating, and running the quality gate…" /> : null}
+          {stage === "working" && progress ? <Loading label={progress} /> : null}
         </Card>
       ) : null}
 
-      {stage === "admitted" && result ? <AdmittedResult result={result} onAgain={() => setStage("guidance")} /> : null}
+      {stage === "admitted" && result ? (
+        <AdmittedResult result={result} pose={pose} posePending={posePending} onAgain={reset} />
+      ) : null}
       {stage === "rejected" ? (
-        <RejectPrompt flags={rejectFlags} reasons={rejectReasons} onAgain={() => setStage("guidance")} />
+        <RejectPrompt flags={rejectFlags} reasons={rejectReasons} onAgain={reset} />
       ) : null}
     </div>
   );
@@ -166,10 +241,21 @@ function GuidanceChecklist({ thresholds }: { thresholds: Record<string, unknown>
   );
 }
 
-function AdmittedResult({ result, onAgain }: { result: CompleteResponse; onAgain: () => void }) {
+function AdmittedResult({
+  result,
+  pose,
+  posePending,
+  onAgain,
+}: {
+  result: CompleteResponse;
+  pose: PoseRun | null;
+  posePending: boolean;
+  onAgain: () => void;
+}) {
   const conf = result.spatial_confidence;
   const confTone = conf === "high" ? "success" : conf === "medium" ? "brand" : "attention";
   return (
+    <>
     <Card>
       <div className="mb-3 flex items-center justify-between">
         <SectionTitle>Clip admitted</SectionTitle>
@@ -177,7 +263,7 @@ function AdmittedResult({ result, onAgain }: { result: CompleteResponse; onAgain
       </div>
       <p className="text-sm text-slate-600">
         Your clip passed the quality gate, was normalised, and published for the analysis pipeline.
-        The coaching report arrives when the pose &amp; biomechanics engines (M06+) are live.
+        The measurements below were read from the file you uploaded.
       </p>
 
       <div className="mt-4 space-y-1">
@@ -223,7 +309,92 @@ function AdmittedResult({ result, onAgain }: { result: CompleteResponse; onAgain
         </Button>
       </div>
     </Card>
+
+    <PoseResult pose={pose} pending={posePending} />
+    </>
   );
+}
+
+// The pose run (M06) for this clip. Body keypoints are real when the service
+// runs with CIP_USE_REAL_POSE_MODEL=true; bat, ball and shot detection are
+// still fakes, so nothing downstream of pose is shown here.
+function PoseResult({ pose, pending }: { pose: PoseRun | null; pending: boolean }) {
+  if (pending) {
+    return (
+      <Card>
+        <SectionTitle>Pose analysis</SectionTitle>
+        <Loading label="Running the pose engine over your frames — this takes a while on CPU…" />
+      </Card>
+    );
+  }
+  if (!pose) {
+    return (
+      <Card>
+        <SectionTitle>Pose analysis</SectionTitle>
+        <EmptyState
+          title="Still waiting on the pose engine"
+          body="The clip was published for analysis, but no run has come back yet. It may still be processing — reload in a moment. If it never arrives, check that pose-service and its worker are running."
+        />
+      </Card>
+    );
+  }
+
+  const rejected = pose.quality === "rejected";
+  const tone = rejected ? "attention" : pose.quality === "provisional" ? "brand" : "success";
+  const isRealModel = !pose.model_version.startsWith("fake-");
+  return (
+    <Card>
+      <div className="mb-3 flex items-center justify-between">
+        <SectionTitle>Pose analysis</SectionTitle>
+        <Pill tone={tone}>{pose.quality}</Pill>
+      </div>
+
+      {rejected ? (
+        <p className="text-sm text-slate-600">
+          The pose engine could not settle on a single subject
+          {pose.rejection_code ? ` (${pose.rejection_code.toLowerCase().replace(/_/g, " ")})` : ""}.
+          It refuses to guess rather than analyse the wrong player.
+        </p>
+      ) : (
+        <p className="text-sm text-slate-600">
+          Body keypoints were tracked across the clip in the CIP coordinate frame.
+        </p>
+      )}
+
+      <div className="mt-4 space-y-1">
+        <MetricRow label="Subject" value={pose.subject_status.replace(/_/g, " ")} />
+        <MetricRow label="Frames analysed" value={String(pose.frame_count)} />
+        <MetricRow
+          label="Mean joint confidence"
+          value={pose.mean_confidence !== null ? pose.mean_confidence.toFixed(3) : "—"}
+          provenance="measured"
+        />
+        <MetricRow label="Model" value={pose.model_version} />
+        <div className="flex items-center justify-between gap-3 py-2">
+          <span className="text-sm text-slate-600">Depth (Z)</span>
+          <ProvenanceBadge provenance={pose.depth_estimated ? "estimated" : "measured"} compact />
+        </div>
+      </div>
+
+      {!isRealModel ? (
+        <p className="mt-4 rounded-lg bg-attention-bg px-3 py-2 text-sm text-attention-fg">
+          These keypoints came from the synthetic model — they are not an analysis of your footage.
+          Start pose-service with <code>CIP_USE_REAL_POSE_MODEL=true</code> for real pose estimation.
+        </p>
+      ) : null}
+
+      <p className="mt-4 text-xs text-slate-400">
+        Bat, ball and shot detection are not yet trained, so biomechanics and coaching reports are
+        not derived from this clip.
+      </p>
+    </Card>
+  );
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function RejectPrompt({

@@ -2,11 +2,12 @@
 //   identity-service (M02) — auth, /v1/me, memberships
 //   profile-service  (M04) — profile attributes, Cricket DNA, baseline, progress
 //   video-service    (M05) — upload, capture guidance, quality result
+//   pose-service     (M06) — the pose run for an analysed clip
 // Calls go through same-origin /api/<svc>/* which Vite proxies per service.
 //
 // M04 is person-anchored (Bearer only — the JWT subject is the player).
-// M05 is tenant-scoped (Bearer + X-Tenant-ID). The client holds the session
-// token + the active tenant, set after login.
+// M05/M06 are tenant-scoped (Bearer + X-Tenant-ID). The client holds the
+// session token + the active tenant, set after login.
 
 export interface ApiErrorBody {
   code: string;
@@ -38,7 +39,7 @@ function uuid(): string {
   return crypto.randomUUID();
 }
 
-type Svc = "identity" | "profile" | "video";
+type Svc = "identity" | "profile" | "video" | "pose";
 
 async function request<T>(
   svc: Svc,
@@ -72,6 +73,29 @@ async function request<T>(
     throw new CipError(err, res.status);
   }
   return data as T;
+}
+
+// Raw byte upload — separate from `request` because the body is the file
+// itself, not JSON.
+//
+// A real cloud backend hands back a presigned `upload_url` pointing at the
+// bucket, and the client PUTs straight there. The local-filesystem backend
+// points `upload_url` back at video-service's own API, which is a different
+// origin from the dev server — so we PUT to the same-origin proxied path
+// instead and let Vite forward it. Same route, no CORS preflight.
+async function uploadBytes(svc: Svc, path: string, file: File): Promise<RawUploadResponse> {
+  const headers: Record<string, string> = { "Content-Type": file.type || "application/octet-stream" };
+  if (_token) headers["Authorization"] = `Bearer ${_token}`;
+  if (_tenantId) headers["X-Tenant-ID"] = _tenantId;
+
+  const res = await fetch(`/api/${svc}${path}`, { method: "PUT", headers, body: file });
+  const text = await res.text();
+  const data = text ? JSON.parse(text) : {};
+  if (!res.ok) {
+    const err: ApiErrorBody = data?.error ?? { code: `HTTP_${res.status}`, message: res.statusText };
+    throw new CipError(err, res.status);
+  }
+  return data as RawUploadResponse;
 }
 
 // --- M02 identity ------------------------------------------------------------
@@ -162,6 +186,25 @@ export interface QualityResult {
 export interface CaptureGuidance {
   thresholds: Record<string, unknown>;
 }
+export interface RawUploadResponse {
+  ingestion_id: string;
+  bytes_received: number;
+}
+
+// --- M06 pose ----------------------------------------------------------------
+export interface PoseRun {
+  correlation_id: string;
+  person_id: string | null;
+  model_version: string;
+  frame_count: number;
+  mean_confidence: number | null;
+  subject_status: string; // tracked | multi_subject_ambiguous | no_subject
+  quality: string; // ok | provisional | rejected
+  rejection_code: string | null;
+  artefact_ref: string | null;
+  depth_estimated: boolean;
+  created_at: string;
+}
 
 export const api = {
   // M02
@@ -199,8 +242,15 @@ export const api = {
   captureGuidance: () => request<CaptureGuidance>("video", "/v1/capture-guidance", { tenant: true }),
   createVideo: (body: { person_id: string; source_type: string; content_type: string; size_bytes?: number }, correlationId: string) =>
     request<CreateVideoResponse>("video", "/v1/videos", { method: "POST", tenant: true, correlationId, body }),
+  uploadRaw: (ingestionId: string, file: File) =>
+    uploadBytes("video", `/v1/videos/${ingestionId}/raw`, file),
   completeVideo: (ingestionId: string) =>
     request<CompleteResponse>("video", `/v1/videos/${ingestionId}/complete`, { method: "POST", tenant: true }),
   getQuality: (ingestionId: string) =>
     request<QualityResult>("video", `/v1/videos/${ingestionId}/quality`, { tenant: true }),
+
+  // M06 (tenant-scoped). The pose run is produced asynchronously by the
+  // pose worker consuming `video.normalized`, so callers poll for it.
+  getPose: (correlationId: string) =>
+    request<PoseRun>("pose", `/v1/pose/${encodeURIComponent(correlationId)}`, { tenant: true }),
 };
